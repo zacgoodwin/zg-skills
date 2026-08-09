@@ -206,7 +206,7 @@ function seatSection(k: number, seat: Seat, brief: string, input: ReviewerPrompt
     return `### Skeptic ${k} -- Agent seat: one Agent tool call${modelClause}, \`run_in_background: false\`, prompt = the brief below VERBATIM (edit nothing)\n\n${heredocBrief(k, brief)}`;
   }
   const command = cliCommand(seat, input.worktreePath, dir);
-  return `### Skeptic ${k} -- CLI seat (${seat.provider}): run this EXACT command with the Bash tool, in the FOREGROUND (edit nothing)
+  return `### Skeptic ${k} -- CLI seat (${seat.provider}): run this EXACT command with the Bash tool, in the FOREGROUND (edit nothing), with the Bash tool's \`timeout\` parameter set to 600000 -- the tool's DEFAULT 2-minute timeout would kill this CLI mid-review
 
 \`\`\`bash
 ${command}

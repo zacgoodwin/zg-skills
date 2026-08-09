@@ -29,7 +29,7 @@ In your verdict file's evidence, set "skepticVerdictPaths" to the paths of ONLY 
 - k=0: nobody looked. Your OWN single-pass certainty that every criterion holds -- never 100, which would claim three independent agreements that never happened.
 A criterion any skeptic REFUTED with concrete evidence is a finding, not a vote to be outnumbered -- surface it in your notes. An honest short list costs one more review pass; a padded one approves a diff nobody refuted.
 
-### Skeptic 1 -- CLI seat (codex): run this EXACT command with the Bash tool, in the FOREGROUND (edit nothing)
+### Skeptic 1 -- CLI seat (codex): run this EXACT command with the Bash tool, in the FOREGROUND (edit nothing), with the Bash tool's `timeout` parameter set to 600000 -- the tool's DEFAULT 2-minute timeout would kill this CLI mid-review
 
 ```bash
 codex exec -s workspace-write --cd "/tmp/wt" -c 'sandbox_workspace_write.writable_roots=["/tmp/sk1"]' --skip-git-repo-check - < "/tmp/sk1/brief.txt"
@@ -71,7 +71,7 @@ verdict written
 Result meanings: "REFUTED" = you found concrete evidence the diff fails a criterion -- name it in notes with file:line and the failing input. "UPHELD" = you genuinely tried and could not refute it; notes says what you attacked. "CONFUSED" = the inputs are unusable. Put your lens ("refutation") and the one claim you checked hardest in evidence.
 SKEPTIC-1-BRIEF
 
-### Skeptic 2 -- CLI seat (agy): run this EXACT command with the Bash tool, in the FOREGROUND (edit nothing)
+### Skeptic 2 -- CLI seat (agy): run this EXACT command with the Bash tool, in the FOREGROUND (edit nothing), with the Bash tool's `timeout` parameter set to 600000 -- the tool's DEFAULT 2-minute timeout would kill this CLI mid-review
 
 ```bash
 cd "/tmp/wt" && agy -p "$(cat "/tmp/sk2/brief.txt")" --add-dir "/tmp/sk2" --dangerously-skip-permissions --print-timeout 9m30s --model gemini-3-pro
