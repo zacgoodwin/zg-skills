@@ -1,4 +1,4 @@
-# adversarial-review
+# z-adversarial-review
 
 Blinded adversarial review for any GitHub pull request, as a Claude Code
 skill. One fresh reviewer agent that sees **only** the spec, the acceptance
@@ -38,7 +38,7 @@ Requires [bun](https://bun.sh), git, [jq](https://jqlang.github.io/jq/), and
 an authenticated [GitHub CLI](https://cli.github.com).
 
 ```bash
-git clone https://github.com/zacgoodwin/adversarial-review.git ~/.claude/skills/adversarial-review
+git clone https://github.com/zacgoodwin/z-adversarial-review.git ~/.claude/skills/z-adversarial-review
 ```
 
 Restart Claude Code (the skill list is scanned at session start). That's the
@@ -67,9 +67,9 @@ model via the Agent tool. Ask for it in words ("skeptics on codex, gemini,
 agy") or pass the flags yourself:
 
 ```bash
-bin/adversarial-review prepare ... --skeptic-models '["codex","gemini","agy"]'
-bin/adversarial-review prepare ... --skeptic-models '["codex"]'   # seats 2-3 stay Claude
-bin/adversarial-review prepare ... --reviewer-model opus          # reviewer is Claude-only
+bin/z-adversarial-review prepare ... --skeptic-models '["codex","gemini","agy"]'
+bin/z-adversarial-review prepare ... --skeptic-models '["codex"]'   # seats 2-3 stay Claude
+bin/z-adversarial-review prepare ... --reviewer-model opus          # reviewer is Claude-only
 ```
 
 Tokens: `inherit` | `haiku` | `sonnet` | `opus` | `fable` (any seat), or
@@ -86,9 +86,9 @@ seat that dies simply reports as a short quorum — never impersonated.
 auth, folder trust; one row per provider; exit 0 all-green):
 
 ```bash
-bin/adversarial-review setup            # deterministic, free
-bin/adversarial-review setup --trust    # write the codex trust entry (idempotent)
-bin/adversarial-review setup --probe    # opt-in live micro-call per CLI (paid)
+bin/z-adversarial-review setup            # deterministic, free
+bin/z-adversarial-review setup --trust    # write the codex trust entry (idempotent)
+bin/z-adversarial-review setup --probe    # opt-in live micro-call per CLI (paid)
 ```
 
 You get a report: verdict (`REVIEW-APPROVE` / `REVIEW-FINDINGS` /
@@ -100,9 +100,9 @@ description.
 There is also a plain CLI for the deterministic core:
 
 ```bash
-bin/adversarial-review prepare --pr-json pr.json --repo . --out-dir /tmp/rev
-bin/adversarial-review collect --verdict <path> --run-root <dir> --run <id> --ticket <n>
-bin/adversarial-review cleanup --repo . --worktree <path>
+bin/z-adversarial-review prepare --pr-json pr.json --repo . --out-dir /tmp/rev
+bin/z-adversarial-review collect --verdict <path> --run-root <dir> --run <id> --ticket <n>
+bin/z-adversarial-review cleanup --repo . --worktree <path>
 ```
 
 ## How a review runs

@@ -87,11 +87,11 @@ describe("SKILL.md pins", () => {
 describe("z- rename and setup", () => {
   const readme = readFileSync(join(REPO_ROOT, "README.md"), "utf8");
 
-  test("no doc still references the bare /adversarial-review invocation (AC12)", () => {
-    // Path references (skills/adversarial-review, bin/adversarial-review, the
-    // clone URL) keep the old name by design; a slash-COMMAND usage is the
-    // token preceded by start-of-line, whitespace, a backtick, or a paren.
-    const bare = /(^|[\s`(])\/adversarial-review/m;
+  test("no doc references any bare adversarial-review name (AC12)", () => {
+    // The rename is total -- repo, clone directory, bin shim, slash command --
+    // so no occurrence of the name may appear without its z- prefix. "the
+    // adversarial reviewer" as prose (space, not hyphen) stays legal.
+    const bare = /(?<!z-)adversarial-review/;
     expect(bare.test(skill)).toBe(false);
     expect(bare.test(readme)).toBe(false);
   });
@@ -104,7 +104,7 @@ describe("z- rename and setup", () => {
 
   test("the setup verb is documented and routed through lib/models.ts", () => {
     expect(skill).toContain(`lib/models.ts" setup`);
-    const shim = readFileSync(join(REPO_ROOT, "bin", "adversarial-review"), "utf8");
+    const shim = readFileSync(join(REPO_ROOT, "bin", "z-adversarial-review"), "utf8");
     expect(shim).toContain("lib/models.ts");
   });
 
@@ -116,8 +116,8 @@ describe("z- rename and setup", () => {
 });
 
 describe("bin shim", () => {
-  test("bin/adversarial-review is a pure shim with no GitHub-CLI call of its own", () => {
-    const shim = readFileSync(join(REPO_ROOT, "bin", "adversarial-review"), "utf8");
+  test("bin/z-adversarial-review is a pure shim with no GitHub-CLI call of its own", () => {
+    const shim = readFileSync(join(REPO_ROOT, "bin", "z-adversarial-review"), "utf8");
     expect(shim).toContain("lib/review.ts");
     expect(/(^|[\s;|&$("'`])gh[\s'"]/m.test(shim)).toBe(false);
   });

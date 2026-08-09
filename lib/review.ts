@@ -1,4 +1,4 @@
-// Deterministic core for the adversarial-review skill. Three verbs:
+// Deterministic core for the z-adversarial-review skill. Three verbs:
 //
 //   prepare   assemble the blinded four-key reviewer input from PR metadata,
 //             generate the lockfile-excluded diff, create the throwaway

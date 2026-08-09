@@ -44,7 +44,7 @@ function commitAll(msg: string): string {
 }
 
 beforeAll(() => {
-  root = mkdtempSync(join(tmpdir(), "adversarial-review-test-"));
+  root = mkdtempSync(join(tmpdir(), "z-adversarial-review-test-"));
   repo = join(root, "repo");
   mkdirSync(repo, { recursive: true });
   git(repo, "init", "-q", "-b", "main");

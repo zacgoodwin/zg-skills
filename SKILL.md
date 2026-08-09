@@ -9,9 +9,9 @@ description: |
   vendors' CLIs (codex, gemini, agy) for cross-provider blind spots; the
   setup verb validates that fleet. Read-only by default; posting the review
   to the PR is an explicit opt-in.
-  Use when asked to "z-adversarial-review", "adversarial-review",
-  "adversarially review this PR", "review PR <N> with skeptics", or for a
-  blinded second opinion on any pull request.
+  Use when asked to "z-adversarial-review", "adversarially review this PR",
+  "review PR <N> with skeptics", or for a blinded second opinion on any pull
+  request.
 ---
 
 # /z-adversarial-review — Blinded Adversarial PR Review
@@ -57,7 +57,7 @@ user plans to use CLI seats, `/z-adversarial-review setup` (below) is the
 precondition worth running once.
 
 ```bash
-PACK="$HOME/.claude/skills/adversarial-review"
+PACK="$HOME/.claude/skills/z-adversarial-review"
 [ -d "$PACK" ] || PACK="$(cd "$(dirname "${BASH_SOURCE:-$0}")" && pwd -P)"
 TMP=$(mktemp -d)
 
@@ -188,7 +188,7 @@ BEFORE a review depends on it — binary on PATH + version, auth, folder
 trust. Deterministic, free, one row per provider; exit 0 all-green else 1:
 
 ```bash
-PACK="$HOME/.claude/skills/adversarial-review"
+PACK="$HOME/.claude/skills/z-adversarial-review"
 [ -d "$PACK" ] || PACK="$(cd "$(dirname "${BASH_SOURCE:-$0}")" && pwd -P)"
 bun "$PACK/lib/models.ts" setup --repo .
 ```
