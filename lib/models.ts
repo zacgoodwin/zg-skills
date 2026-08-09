@@ -119,19 +119,31 @@ export function briefPath(skepticDir: string): string {
 // granted explicitly, run FOREGROUND via the reviewer's Bash tool. The brief
 // is a FILE (prepare writes it) so no prompt text rides the command line
 // except agy's, whose headless mode takes the prompt as an argument.
-export function cliCommand(seat: Seat & { kind: "cli" }, worktreePath: string, skepticDir: string): string {
+//
+// gemini and agy sandbox READS to their granted directories, and the brief
+// points every skeptic at the blinded input file -- so those two are granted
+// the input file's directory as well as their own verdict dir. codex's
+// workspace-write sandbox restricts only writes, so its grant stays the
+// verdict dir alone.
+export function cliCommand(
+  seat: Seat & { kind: "cli" },
+  worktreePath: string,
+  skepticDir: string,
+  inputPath: string
+): string {
   const wt = shPath(worktreePath);
   const dir = shPath(skepticDir);
+  const inputDir = shPath(dirname(inputPath));
   const brief = `${dir}/brief.txt`;
   switch (seat.provider) {
     case "codex":
       return `codex exec -s workspace-write --cd "${wt}" -c 'sandbox_workspace_write.writable_roots=["${dir}"]'${seat.model ? ` -m ${seat.model}` : ""} --skip-git-repo-check - < "${brief}"`;
     case "gemini":
       // --skip-trust = per-session folder trust, no config writes.
-      return `cd "${wt}" && gemini -y --skip-trust --include-directories "${dir}"${seat.model ? ` -m ${seat.model}` : ""} -p "Follow the review brief on stdin exactly." < "${brief}"`;
+      return `cd "${wt}" && gemini -y --skip-trust --include-directories "${dir},${inputDir}"${seat.model ? ` -m ${seat.model}` : ""} -p "Follow the review brief on stdin exactly." < "${brief}"`;
     case "agy":
       // --print-timeout raised from agy's 5m default to fit the Bash tool's 10-min cap.
-      return `cd "${wt}" && agy -p "$(cat "${brief}")" --add-dir "${dir}" --dangerously-skip-permissions --print-timeout 9m30s${seat.model ? ` --model ${seat.model}` : ""}`;
+      return `cd "${wt}" && agy -p "$(cat "${brief}")" --add-dir "${dir}" --add-dir "${inputDir}" --dangerously-skip-permissions --print-timeout 9m30s${seat.model ? ` --model ${seat.model}` : ""}`;
   }
 }
 

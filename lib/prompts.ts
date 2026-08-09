@@ -200,12 +200,12 @@ function heredocBrief(k: number, brief: string): string {
   return `<<<SKEPTIC-${k}-BRIEF\n${brief}\nSKEPTIC-${k}-BRIEF`;
 }
 
-function seatSection(k: number, seat: Seat, brief: string, input: ReviewerPromptInput, dir: string): string {
+function seatSection(k: number, seat: Seat, brief: string, input: ReviewerPromptInput, dir: string, inputPath: string): string {
   if (seat.kind === "agent") {
     const modelClause = seat.model === "inherit" ? "" : `, \`model: "${seat.model}"\``;
     return `### Skeptic ${k} -- Agent seat: one Agent tool call${modelClause}, \`run_in_background: false\`, prompt = the brief below VERBATIM (edit nothing)\n\n${heredocBrief(k, brief)}`;
   }
-  const command = cliCommand(seat, input.worktreePath, dir);
+  const command = cliCommand(seat, input.worktreePath, dir, inputPath);
   return `### Skeptic ${k} -- CLI seat (${seat.provider}): run this EXACT command with the Bash tool, in the FOREGROUND (edit nothing), with the Bash tool's \`timeout\` parameter set to 600000 -- the tool's DEFAULT 2-minute timeout would kill this CLI mid-review
 
 \`\`\`bash
@@ -245,7 +245,7 @@ export function reviewerPrompt(
           const brief = skepticBrief(k, input, inputPath, dir, spawnFor(verdict, "skeptic"));
           return legacyLineup
             ? `### Skeptic ${k}'s brief -- pass VERBATIM as one Agent spawn's prompt (edit nothing)\n\n${heredocBrief(k, brief)}`
-            : seatSection(k, seats[idx], brief, input, dir);
+            : seatSection(k, seats[idx], brief, input, dir, inputPath);
         })
         .join("\n\n")
     : "";

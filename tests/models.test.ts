@@ -121,26 +121,27 @@ describe("parseReviewerSeat", () => {
 describe("cliCommand", () => {
   const WT = "D:\\repo\\.worktrees\\review-pr-9";
   const DIR = "D:\\out\\runs\\r\\t9\\reviewer-1\\skeptic-1";
+  const INPUT_PATH = "D:\\out\\input-pr-9.json";
 
   test("codex: workspace-write sandbox scoped to the worktree, verdict dir granted, brief on stdin", () => {
-    const c = cliCommand({ kind: "cli", provider: "codex" }, WT, DIR);
+    const c = cliCommand({ kind: "cli", provider: "codex" }, WT, DIR, INPUT_PATH);
     expect(c).toBe(
       `codex exec -s workspace-write --cd "D:/repo/.worktrees/review-pr-9" -c 'sandbox_workspace_write.writable_roots=["D:/out/runs/r/t9/reviewer-1/skeptic-1"]' --skip-git-repo-check - < "D:/out/runs/r/t9/reviewer-1/skeptic-1/brief.txt"`
     );
-    expect(cliCommand({ kind: "cli", provider: "codex", model: "o3" }, WT, DIR)).toContain(" -m o3 ");
+    expect(cliCommand({ kind: "cli", provider: "codex", model: "o3" }, WT, DIR, INPUT_PATH)).toContain(" -m o3 ");
   });
 
-  test("gemini: yolo + per-run trust bypass, verdict dir included, brief on stdin, cwd = worktree", () => {
-    const c = cliCommand({ kind: "cli", provider: "gemini" }, WT, DIR);
+  test("gemini: yolo + per-run trust bypass, verdict dir AND input dir included, brief on stdin, cwd = worktree", () => {
+    const c = cliCommand({ kind: "cli", provider: "gemini" }, WT, DIR, INPUT_PATH);
     expect(c).toBe(
-      `cd "D:/repo/.worktrees/review-pr-9" && gemini -y --skip-trust --include-directories "D:/out/runs/r/t9/reviewer-1/skeptic-1" -p "Follow the review brief on stdin exactly." < "D:/out/runs/r/t9/reviewer-1/skeptic-1/brief.txt"`
+      `cd "D:/repo/.worktrees/review-pr-9" && gemini -y --skip-trust --include-directories "D:/out/runs/r/t9/reviewer-1/skeptic-1,D:/out" -p "Follow the review brief on stdin exactly." < "D:/out/runs/r/t9/reviewer-1/skeptic-1/brief.txt"`
     );
   });
 
-  test("agy: brief as the -p argument, permissions skipped per-run, print timeout under the Bash cap", () => {
-    const c = cliCommand({ kind: "cli", provider: "agy", model: "gemini-3-pro" }, WT, DIR);
+  test("agy: brief as the -p argument, verdict AND input dirs added, permissions skipped per-run, print timeout under the Bash cap", () => {
+    const c = cliCommand({ kind: "cli", provider: "agy", model: "gemini-3-pro" }, WT, DIR, INPUT_PATH);
     expect(c).toBe(
-      `cd "D:/repo/.worktrees/review-pr-9" && agy -p "$(cat "D:/out/runs/r/t9/reviewer-1/skeptic-1/brief.txt")" --add-dir "D:/out/runs/r/t9/reviewer-1/skeptic-1" --dangerously-skip-permissions --print-timeout 9m30s --model gemini-3-pro`
+      `cd "D:/repo/.worktrees/review-pr-9" && agy -p "$(cat "D:/out/runs/r/t9/reviewer-1/skeptic-1/brief.txt")" --add-dir "D:/out/runs/r/t9/reviewer-1/skeptic-1" --add-dir "D:/out" --dangerously-skip-permissions --print-timeout 9m30s --model gemini-3-pro`
     );
   });
 });

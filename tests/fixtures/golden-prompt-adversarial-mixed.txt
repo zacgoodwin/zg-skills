@@ -74,7 +74,7 @@ SKEPTIC-1-BRIEF
 ### Skeptic 2 -- CLI seat (agy): run this EXACT command with the Bash tool, in the FOREGROUND (edit nothing), with the Bash tool's `timeout` parameter set to 600000 -- the tool's DEFAULT 2-minute timeout would kill this CLI mid-review
 
 ```bash
-cd "/tmp/wt" && agy -p "$(cat "/tmp/sk2/brief.txt")" --add-dir "/tmp/sk2" --dangerously-skip-permissions --print-timeout 9m30s --model gemini-3-pro
+cd "/tmp/wt" && agy -p "$(cat "/tmp/sk2/brief.txt")" --add-dir "/tmp/sk2" --add-dir "/tmp" --dangerously-skip-permissions --print-timeout 9m30s --model gemini-3-pro
 ```
 
 The command itself feeds this seat's brief -- already on disk at /tmp/sk2/brief.txt -- to the CLI. The brief is reproduced below for the record only; the command reads the FILE, so paste nothing:
