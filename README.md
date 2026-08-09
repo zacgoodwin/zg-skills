@@ -58,6 +58,14 @@ Ask for "single pass" or "with skeptics" to override the automatic fan-out
 decision. The review is read-only; posting the report as a PR comment happens
 only when you explicitly ask.
 
+## Documentation
+
+- [Tutorial: your first blinded review](docs/tutorial-first-review.md) — skill and by-hand CLI walkthrough, zero to verdict
+- [CLI reference](docs/reference-cli.md) — every verb, flag, manifest field, seat token, and the verdict file schema
+- [How to run skeptic seats on other vendors' CLIs](docs/howto-cross-provider-skeptics.md) — codex / gemini / agy setup and troubleshooting
+- [How to run the reviewer eval](docs/howto-run-the-eval.md) — free smoke, paid run, reading the report
+- [Why blinded, why skeptics, why files](docs/explanation-design.md) — the design rationale and its trade-offs
+
 ## Cross-provider skeptics (per-seat model selection)
 
 Three skeptics on one model share that model's blind spots. Each skeptic
