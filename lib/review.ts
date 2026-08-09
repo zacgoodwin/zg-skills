@@ -58,14 +58,17 @@ import {
 
 // -- spec selection -----------------------------------------------------------
 
-// The acceptance-criteria slice: lines after a `### Acceptance Criteria`
-// heading, up to the next heading of ANY level; a second AC heading re-opens
-// the section. Returns "" when the spec has no AC section.
+// The acceptance-criteria slice: lines after an `Acceptance Criteria` heading
+// (any level -- zstack tickets use ###, /spec issues use ##), up to the next
+// heading of ANY level; a second AC heading re-opens the section. Returns ""
+// when the spec has no AC section. The heading-level tolerance came out of the
+// adversarial review of PR #2, which reviewed against the fallback because the
+// spec's own criteria sat under a level-2 heading.
 export function extractAcceptanceCriteria(spec: string): string {
   const out: string[] = [];
   let inSection = false;
   for (const line of spec.split(/\r?\n/)) {
-    if (/^### Acceptance Criteria/.test(line)) {
+    if (/^#{1,6} Acceptance Criteria/.test(line)) {
       inSection = true;
       continue;
     }
@@ -83,7 +86,7 @@ export function extractAcceptanceCriteria(spec: string): string {
 // the gap instead of inventing criteria, and tells the reviewer to treat the
 // gap as a finding rather than a license to approve.
 export const AC_FALLBACK =
-  "(The spec has no `### Acceptance Criteria` section. Derive the implied contract from the spec above and hold the diff to it as strictly as written criteria; the missing section is itself a finding worth reporting.)";
+  "(The spec has no `Acceptance Criteria` heading. Derive the implied contract from the spec above and hold the diff to it as strictly as written criteria; the missing section is itself a finding worth reporting.)";
 
 export const NO_SPEC_FALLBACK =
   "(This PR carries no description and links no closing issue: there is no spec independent of the diff. Judge the diff on its own coherence -- tests that actually exercise it, no silent behavior changes, no scope a title cannot justify -- and report the missing spec as a finding.)";

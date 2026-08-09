@@ -48,7 +48,7 @@ git apply --unsafe-paths --directory="$WORKTREE" "$FIX/diff.patch"
 # 2. Assemble the BLINDED four-key reviewer input from the fixture. The AC
 #    section is extracted with the same rule lib/review.ts uses. defects.json
 #    is NEVER part of this input -- it is the grader's answer key.
-AC="$(awk '/^### Acceptance Criteria/{f=1;next} /^#/{f=0} f' "$FIX/ticket.md")"
+AC="$(awk '/^#+ Acceptance Criteria/{f=1;next} /^#/{f=0} f' "$FIX/ticket.md")"
 bun -e "import {readFileSync,writeFileSync} from 'node:fs';
   writeFileSync(process.argv[5], JSON.stringify({
     ticketBody: readFileSync(process.argv[1],'utf8'),

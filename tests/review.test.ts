@@ -129,6 +129,11 @@ describe("extractAcceptanceCriteria", () => {
     expect(extractAcceptanceCriteria("## Plan\nno criteria here\n")).toBe("");
   });
 
+  test("a level-2 heading works too (spec issues use ##, zstack tickets ###)", () => {
+    const spec = "## Context\nx\n## Acceptance Criteria\n1. AC1\n2. AC2\n## Testing Plan\nnot ac\n";
+    expect(extractAcceptanceCriteria(spec)).toBe("1. AC1\n2. AC2");
+  });
+
   test("a second AC heading re-opens the section", () => {
     const spec = "### Acceptance Criteria\n- AC1\n## Other\nx\n### Acceptance Criteria\n- AC2\n";
     expect(extractAcceptanceCriteria(spec)).toBe("- AC1\n- AC2");

@@ -109,8 +109,8 @@ bin/z-adversarial-review cleanup --repo . --worktree <path>
 
 1. **`prepare`** (code): picks the spec — the PR's linked closing issue if
    one exists, else the PR description explicitly marked author-authored,
-   else a named "no spec" fallback; slices the `### Acceptance Criteria`
-   section; writes the merge-base diff with lockfiles excluded (unfiltered
+   else a named "no spec" fallback; slices the `Acceptance Criteria`
+   section (any heading level); writes the merge-base diff with lockfiles excluded (unfiltered
    fallback for lockfile-only PRs); makes a throwaway worktree of the head
    commit under `.worktrees/`; mints the run identity; builds the reviewer
    prompt with three code-composed skeptic briefs embedded.

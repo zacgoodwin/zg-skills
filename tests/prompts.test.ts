@@ -130,7 +130,10 @@ describe("skepticBrief", () => {
 // normalized to / for platform stability). The all-inherit path must stay
 // byte-identical to them forever; the mixed fixture pins the per-seat variant.
 const FIXTURES = join(import.meta.dir, "fixtures");
-const golden = (name: string) => readFileSync(join(FIXTURES, name), "utf8");
+// \r stripped on read: .gitattributes pins these -text, but a clone that
+// predates the pin (or a tool that rewrote the file) must not fail the
+// byte-identity test over line endings it never authored.
+const golden = (name: string) => readFileSync(join(FIXTURES, name), "utf8").replace(/\r\n/g, "\n");
 const norm = (s: string) => s.replace(/\\/g, "/");
 
 describe("per-seat lineups", () => {
