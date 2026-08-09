@@ -84,6 +84,37 @@ describe("SKILL.md pins", () => {
   });
 });
 
+describe("z- rename and setup", () => {
+  const readme = readFileSync(join(REPO_ROOT, "README.md"), "utf8");
+
+  test("no doc still references the bare /adversarial-review invocation (AC12)", () => {
+    // Path references (skills/adversarial-review, bin/adversarial-review, the
+    // clone URL) keep the old name by design; a slash-COMMAND usage is the
+    // token preceded by start-of-line, whitespace, a backtick, or a paren.
+    const bare = /(^|[\s`(])\/adversarial-review/m;
+    expect(bare.test(skill)).toBe(false);
+    expect(bare.test(readme)).toBe(false);
+  });
+
+  test("the skill is named and invoked z-adversarial-review", () => {
+    expect(skill).toContain("name: z-adversarial-review");
+    expect(skill).toContain("/z-adversarial-review 123");
+    expect(readme).toContain("/z-adversarial-review 123");
+  });
+
+  test("the setup verb is documented and routed through lib/models.ts", () => {
+    expect(skill).toContain(`lib/models.ts" setup`);
+    const shim = readFileSync(join(REPO_ROOT, "bin", "adversarial-review"), "utf8");
+    expect(shim).toContain("lib/models.ts");
+  });
+
+  test("per-seat flags are documented with the reviewer's Claude-only rule", () => {
+    expect(skill).toContain("--skeptic-models");
+    expect(skill).toContain("--reviewer-model");
+    expect(readme).toContain("--skeptic-models");
+  });
+});
+
 describe("bin shim", () => {
   test("bin/adversarial-review is a pure shim with no GitHub-CLI call of its own", () => {
     const shim = readFileSync(join(REPO_ROOT, "bin", "adversarial-review"), "utf8");

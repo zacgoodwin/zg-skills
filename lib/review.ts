@@ -25,11 +25,23 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { handleCliError, parseFlags, readJson, requireFlag, str, ZError } from "./cli.ts";
 import {
+  briefPath,
+  cliProvidersIn,
+  parseReviewerSeat,
+  preflightProviders,
+  realDeps,
+  resolveSkepticSeats,
+  seatToken,
+  type ProviderDeps,
+  type Seat,
+} from "./models.ts";
+import {
   ADVERSARIAL_MODES,
   DEFAULT_ADVERSARIAL_MODE,
   adversarialActive,
   countDiffLines,
   reviewerPrompt,
+  skepticBrief,
   spawnStub,
   type AdversarialMode,
   type ReviewerPromptInput,
@@ -193,6 +205,10 @@ export interface ReviewManifest {
   labels: string[];
   adversarialMode: AdversarialMode;
   adversarial: boolean;
+  // Per-seat model selection, RESOLVED (gap-fills included): the reviewer's
+  // Agent-tool token and the canonical 3-seat skeptic lineup.
+  reviewerModel: string;
+  skepticModels: string[];
   // One-shot run identity, minted fresh per prepare so a re-run can never
   // mis-address the previous attempt's verdict as its own.
   runId: string;
@@ -210,7 +226,10 @@ export interface ReviewManifest {
 // in readVerdict still rejects any stale file.
 const STANDALONE_ATTEMPT = 1;
 
-export function prepare(flags: Record<string, string | boolean>): ReviewManifest {
+export function prepare(
+  flags: Record<string, string | boolean>,
+  deps: ProviderDeps = realDeps()
+): ReviewManifest {
   const repo = resolve(requireFlag(flags, "repo"));
   const outDir = resolve(requireFlag(flags, "out-dir"));
   const pr = readPrMeta(requireFlag(flags, "pr-json"));
@@ -221,6 +240,28 @@ export function prepare(flags: Record<string, string | boolean>): ReviewManifest
       `--adversarial-mode must be one of "off", "non-trivial", "always", got ${JSON.stringify(modeArg)}.`
     );
   }
+
+  // Per-seat model selection, fail-fast BEFORE any worktree or prompt write:
+  // parse tokens (the reviewer seat rejects CLI providers by name), then
+  // preflight each distinct requested CLI with the same check `setup` uses.
+  const reviewerModel = parseReviewerSeat(str(flags, "reviewer-model") ?? "inherit");
+  const skepticModelsRaw = str(flags, "skeptic-models");
+  let tokens: string[] = [];
+  if (skepticModelsRaw !== undefined) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(skepticModelsRaw);
+    } catch (e) {
+      throw new ZError(`--skeptic-models must be a JSON array of 0-3 tokens: ${(e as Error).message}`);
+    }
+    if (!Array.isArray(parsed) || parsed.some((t) => typeof t !== "string")) {
+      throw new ZError(`--skeptic-models must be a JSON array of 0-3 tokens (strings).`);
+    }
+    tokens = parsed as string[];
+  }
+  const skepticSeats: Seat[] = resolveSkepticSeats(tokens);
+  preflightProviders(cliProvidersIn(skepticSeats), deps);
+
   if (!existsSync(join(repo, ".git"))) {
     throw new ZError(`--repo ${repo} is not a git checkout (no .git).`);
   }
@@ -324,8 +365,28 @@ export function prepare(flags: Record<string, string | boolean>): ReviewManifest
   // count + labels. reviewerPrompt re-runs the four-key blindness gate on the
   // input we just wrote and composes the three skeptic briefs itself.
   const adversarial = adversarialActive(mode, countDiffLines(diff), labels);
+
+  // A CLI seat's brief is a FILE its composed command feeds to the provider;
+  // written here so the reviewer never pastes prompt text into a shell. Same
+  // brief content as an Agent seat's -- a brief never names its seat's model.
+  if (adversarial) {
+    skepticSeats.forEach((seat, idx) => {
+      if (seat.kind !== "cli") return;
+      const k = idx + 1;
+      writeFileSync(
+        briefPath(skepticDirs[idx]),
+        skepticBrief(k, input, inputPath, skepticDirs[idx], {
+          runId,
+          ticket: pr.number,
+          stage: "skeptic",
+          attempt: STANDALONE_ATTEMPT,
+        })
+      );
+    });
+  }
+
   const promptPath = join(outDir, `prompt-pr-${pr.number}.txt`);
-  writeFileSync(promptPath, reviewerPrompt(input, inputPath, target, adversarial));
+  writeFileSync(promptPath, reviewerPrompt(input, inputPath, target, adversarial, skepticSeats));
 
   return {
     pr: pr.number,
@@ -337,6 +398,8 @@ export function prepare(flags: Record<string, string | boolean>): ReviewManifest
     labels,
     adversarialMode: mode,
     adversarial,
+    reviewerModel,
+    skepticModels: skepticSeats.map(seatToken),
     runId,
     runRoot,
     verdictPath: target.path,
@@ -413,6 +476,8 @@ const USAGE = `review <command> [args]
 
   prepare --pr-json <pr.json> --repo <dir> --out-dir <dir>
           [--issue-json <issue.json>] [--adversarial-mode <off|non-trivial|always>]
+          [--reviewer-model <inherit|haiku|sonnet|opus|fable>]
+          [--skeptic-models '<json array of 0-3 seat tokens>']
       Assemble the blinded reviewer input for a PR: spec (linked issue body,
       else PR description), acceptance-criteria slice, lockfile-excluded diff,
       throwaway worktree of the head commit, one-shot run identity -- then
@@ -421,6 +486,9 @@ const USAGE = `review <command> [args]
       "stub" as the Agent spawn's prompt.
       pr.json:    gh pr view output with fields ${PR_FIELDS}
       issue.json: optional linked-issue fetch with fields body,labels
+      Seat tokens: inherit|haiku|sonnet|opus|fable (Agent tool), or
+      codex[:<m>]|gemini[:<m>]|agy[:<m>] (skeptic seats only; preflighted).
+      Short lineups gap-fill with inherit; see lib/models.ts setup.
 
   collect --verdict <verdict.json> --run-root <dir> --run <runId> --ticket <n>
       Validate the reviewer's verdict file against the spawn prepare minted

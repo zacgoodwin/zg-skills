@@ -15,6 +15,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { handleCliError, parseFlags, str, ZError } from "./cli.ts";
+import { INHERIT_SEAT, SKEPTIC_SEAT_COUNT, allInherit, briefPath, cliCommand, type Seat } from "./models.ts";
 import { verdictInstructions, verdictPath, type ExpectedSpawn } from "./verdict.ts";
 
 // -- adversarial mode ----------------------------------------------------------
@@ -178,7 +179,51 @@ Result meanings: "REFUTED" = you found concrete evidence the diff fails a criter
 // makes collection happen inside the turn is named explicitly, the degraded
 // path (k < 3) is sanctioned explicitly, and the k-to-confidence mapping is a
 // lookup table, never arithmetic in a model reply.
-export function reviewerPrompt(input: ReviewerPromptInput, inputPath: string, verdict: VerdictTarget, adversarial: boolean = false): string {
+//
+// `skepticSeats` (per-seat model selection): 3 resolved seats, composed by the
+// caller in code. All-inherit renders the pre-feature prompt BYTE-IDENTICALLY
+// (golden-pinned); any other lineup renders the per-seat variant, where each
+// seat's section names its exact launch mechanics -- an Agent tool spawn (with
+// its `model` value when not inherit) or one exact CLI command for the Bash
+// tool. Seat tokens are constructor params like `inputPath`, never input keys,
+// and a brief never tells a skeptic what model it is.
+const SKEPTIC_SHARED_TAIL = `You therefore never wait for a skeptic, and you never re-count for one either: each skeptic reports by WRITING ITS OWN VERDICT FILE, and the harness counts those files itself -- a skeptic that lands after you return still counts, and a tally you write cannot vouch for a file that is not there. Once your three tool calls return, read whichever skeptic verdict files exist, weigh any refutation's evidence in your own judgment, and write YOUR verdict. Do not spawn replacements, do not re-ping, and do not end your turn to "wait", "check back", or "await completion notifications" -- those are not slower routes to a verdict, they are how your review gets thrown away.
+
+In your verdict file's evidence, set "skepticVerdictPaths" to the paths of ONLY the skeptic verdict files that exist when you look (0-3 of them; list none that you cannot read). Set "confidence" off this table over the k verdicts you actually hold -- do no arithmetic:
+- k=3: 3 UPHELD -> 100, 2 -> 67, 1 -> 33, 0 -> 0
+- k=2: 2 UPHELD -> 100, 1 -> 50, 0 -> 0
+- k=1: 1 UPHELD -> 100, 0 -> 0
+- k=0: nobody looked. Your OWN single-pass certainty that every criterion holds -- never 100, which would claim three independent agreements that never happened.
+A criterion any skeptic REFUTED with concrete evidence is a finding, not a vote to be outnumbered -- surface it in your notes. An honest short list costs one more review pass; a padded one approves a diff nobody refuted.`;
+
+function heredocBrief(k: number, brief: string): string {
+  return `<<<SKEPTIC-${k}-BRIEF\n${brief}\nSKEPTIC-${k}-BRIEF`;
+}
+
+function seatSection(k: number, seat: Seat, brief: string, input: ReviewerPromptInput, dir: string): string {
+  if (seat.kind === "agent") {
+    const modelClause = seat.model === "inherit" ? "" : `, \`model: "${seat.model}"\``;
+    return `### Skeptic ${k} -- Agent seat: one Agent tool call${modelClause}, \`run_in_background: false\`, prompt = the brief below VERBATIM (edit nothing)\n\n${heredocBrief(k, brief)}`;
+  }
+  const command = cliCommand(seat, input.worktreePath, dir);
+  return `### Skeptic ${k} -- CLI seat (${seat.provider}): run this EXACT command with the Bash tool, in the FOREGROUND (edit nothing)
+
+\`\`\`bash
+${command}
+\`\`\`
+
+The command itself feeds this seat's brief -- already on disk at ${briefPath(dir)} -- to the CLI. The brief is reproduced below for the record only; the command reads the FILE, so paste nothing:
+
+${heredocBrief(k, brief)}`;
+}
+
+export function reviewerPrompt(
+  input: ReviewerPromptInput,
+  inputPath: string,
+  verdict: VerdictTarget,
+  adversarial: boolean = false,
+  skepticSeats?: Seat[]
+): string {
   assertReviewerInput(input);
   const skepticDirs = verdict.skepticDirs ?? [];
   if (adversarial && skepticDirs.length !== 3) {
@@ -186,33 +231,49 @@ export function reviewerPrompt(input: ReviewerPromptInput, inputPath: string, ve
       `An adversarial reviewer prompt needs exactly 3 skeptic artifact directories (verdict.skepticDirs), got ${skepticDirs.length}. The caller composes them in code; the reviewer never invents paths.`
     );
   }
+  const seats = skepticSeats ?? Array(SKEPTIC_SEAT_COUNT).fill(INHERIT_SEAT);
+  if (adversarial && seats.length !== SKEPTIC_SEAT_COUNT) {
+    throw new ZError(
+      `An adversarial reviewer prompt needs exactly ${SKEPTIC_SEAT_COUNT} resolved skeptic seats, got ${seats.length}. resolveSkepticSeats gap-fills short lineups; the caller passes the resolved 3.`
+    );
+  }
+  const legacyLineup = allInherit(seats);
   const briefs = adversarial
     ? skepticDirs
         .map((dir, idx) => {
           const k = idx + 1;
-          return `### Skeptic ${k}'s brief -- pass VERBATIM as one Agent spawn's prompt (edit nothing)\n\n<<<SKEPTIC-${k}-BRIEF\n${skepticBrief(k, input, inputPath, dir, spawnFor(verdict, "skeptic"))}\nSKEPTIC-${k}-BRIEF`;
+          const brief = skepticBrief(k, input, inputPath, dir, spawnFor(verdict, "skeptic"));
+          return legacyLineup
+            ? `### Skeptic ${k}'s brief -- pass VERBATIM as one Agent spawn's prompt (edit nothing)\n\n${heredocBrief(k, brief)}`
+            : seatSection(k, seats[idx], brief, input, dir);
         })
         .join("\n\n")
     : "";
-  const superTruth = adversarial
-    ? `
+  const superTruth = !adversarial
+    ? ""
+    : legacyLineup
+      ? `
 ## Super-truth pass (adversarial mode active)
 This diff's blast radius earned an adversarial review; do NOT trust your single read. Spawn 3 INDEPENDENT skeptic sub-agents with the Agent tool -- nested \`claude -p\` is denied by the classifier, so use the Agent tool, not headless claude. Their briefs are WRITTEN FOR YOU below, one per skeptic, each already carrying the blinded inputs pointer and its own verdict-file contract. Pass each brief verbatim as that spawn's prompt; the composition is not yours to edit -- a reworded brief is how blindness leaks and how verdict files end up where nothing counts them.
 
 COLLECT THEM INSIDE THIS TURN. Spawn all three in ONE message, as three Agent tool calls each carrying \`run_in_background: false\`. That flag is the entire mechanism: it makes the three returns come back as tool results in this same turn, and the three still run concurrently because they were launched together. The DEFAULT is a background spawn, whose only delivery channel is a task notification BETWEEN turns -- and you get no next turn, because this harness sends you exactly one message by design. A backgrounded skeptic is one you will never hear from, however long you wait.
 
-You therefore never wait for a skeptic, and you never re-count for one either: each skeptic reports by WRITING ITS OWN VERDICT FILE, and the harness counts those files itself -- a skeptic that lands after you return still counts, and a tally you write cannot vouch for a file that is not there. Once your three tool calls return, read whichever skeptic verdict files exist, weigh any refutation's evidence in your own judgment, and write YOUR verdict. Do not spawn replacements, do not re-ping, and do not end your turn to "wait", "check back", or "await completion notifications" -- those are not slower routes to a verdict, they are how your review gets thrown away.
-
-In your verdict file's evidence, set "skepticVerdictPaths" to the paths of ONLY the skeptic verdict files that exist when you look (0-3 of them; list none that you cannot read). Set "confidence" off this table over the k verdicts you actually hold -- do no arithmetic:
-- k=3: 3 UPHELD -> 100, 2 -> 67, 1 -> 33, 0 -> 0
-- k=2: 2 UPHELD -> 100, 1 -> 50, 0 -> 0
-- k=1: 1 UPHELD -> 100, 0 -> 0
-- k=0: nobody looked. Your OWN single-pass certainty that every criterion holds -- never 100, which would claim three independent agreements that never happened.
-A criterion any skeptic REFUTED with concrete evidence is a finding, not a vote to be outnumbered -- surface it in your notes. An honest short list costs one more review pass; a padded one approves a diff nobody refuted.
+${SKEPTIC_SHARED_TAIL}
 
 ${briefs}
 `
-    : "";
+      : `
+## Super-truth pass (adversarial mode active)
+This diff's blast radius earned an adversarial review; do NOT trust your single read. Launch 3 INDEPENDENT skeptics -- this review runs a PER-SEAT lineup, and each seat's section below names its exact launch mechanics: an Agent tool spawn (nested \`claude -p\` is denied by the classifier, so use the Agent tool, not headless claude) or one EXACT CLI command for the Bash tool. The briefs are WRITTEN FOR YOU below, one per skeptic, each already carrying the blinded inputs pointer and its own verdict-file contract. Pass each Agent seat's brief verbatim as that spawn's prompt and run each CLI seat's command character-for-character; the composition is not yours to edit -- a reworded brief or an edited command is how blindness leaks and how verdict files end up where nothing counts them.
+
+COLLECT THEM INSIDE THIS TURN. Launch all three in ONE message: each Agent seat as one Agent tool call carrying \`run_in_background: false\` (plus the \`model\` value its section names, when it names one), each CLI seat as one Bash tool call running its command in the FOREGROUND -- never backgrounded. Launched together they still run concurrently, and every return comes back as a tool result in this same turn. The Agent tool's DEFAULT is a background spawn, whose only delivery channel is a task notification BETWEEN turns -- and you get no next turn, because this harness sends you exactly one message by design. A backgrounded seat is one you will never hear from, however long you wait.
+
+A CLI seat that errors or times out has written no verdict file: that is a real, reportable outcome, and the harness reports a short quorum honestly. Do not retry it, do not spawn a substitute, and NEVER write a verdict file on a dead seat's behalf -- you speak only for yourself.
+
+${SKEPTIC_SHARED_TAIL}
+
+${briefs}
+`;
   return `You are an ADVERSARIAL REVIEWER in a fresh context, running UNATTENDED. You are blinded by design: your ONLY inputs are the spec, its acceptance criteria, the diff, and a throwaway worktree of the head commit. There is no PR discussion, no CI status, no author or reviewer transcript -- and any claim you cannot verify from these inputs yourself is unverified. Your job is to find the reasons this diff should NOT merge.
 
 ## Your inputs (read from the file -- do not look anywhere else)

@@ -3,6 +3,9 @@
 // paid eval's job (evals/reviewer); these pin the mechanisms that must never
 // silently drift.
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { AGENT_MODELS, CLI_PROVIDERS, resolveSkepticSeats } from "../lib/models.ts";
 import {
   ADVERSARIAL_DIFF_THRESHOLD,
   ADVERSARIAL_TRIGGER_LABELS,
@@ -118,6 +121,56 @@ describe("skepticBrief", () => {
     // The verdict path is rendered platform-joined (backslashes on Windows).
     expect(b).toContain(verdictPath("/tmp/sk2"));
     for (const r of STAGE_RESULTS.skeptic) expect(b).toContain(`"${r}"`);
+  });
+});
+
+// -- per-seat model selection --------------------------------------------------
+
+// Golden fixtures were generated from the PRE-FEATURE code (backslashes
+// normalized to / for platform stability). The all-inherit path must stay
+// byte-identical to them forever; the mixed fixture pins the per-seat variant.
+const FIXTURES = join(import.meta.dir, "fixtures");
+const golden = (name: string) => readFileSync(join(FIXTURES, name), "utf8");
+const norm = (s: string) => s.replace(/\\/g, "/");
+
+describe("per-seat lineups", () => {
+  test("no seats arg and explicit all-inherit are both byte-identical to the pre-feature goldens", () => {
+    expect(norm(reviewerPrompt(INPUT, "/tmp/input.json", TARGET, false))).toBe(golden("golden-prompt-single.txt"));
+    expect(norm(reviewerPrompt(INPUT, "/tmp/input.json", TARGET, true))).toBe(
+      golden("golden-prompt-adversarial-inherit.txt")
+    );
+    expect(norm(reviewerPrompt(INPUT, "/tmp/input.json", TARGET, true, resolveSkepticSeats([])))).toBe(
+      golden("golden-prompt-adversarial-inherit.txt")
+    );
+  });
+
+  test("mixed lineup matches its golden: model line per Agent seat, exact command per CLI seat, briefs verbatim", () => {
+    const seats = resolveSkepticSeats(["codex", "agy:gemini-3-pro", "haiku"]);
+    const p = norm(reviewerPrompt(INPUT, "/tmp/input.json", TARGET, true, seats));
+    expect(p).toBe(golden("golden-prompt-adversarial-mixed.txt"));
+    // Load-bearing lines, asserted independently of the fixture bytes:
+    expect(p).toContain('Skeptic 3 -- Agent seat: one Agent tool call, `model: "haiku"`, `run_in_background: false`');
+    expect(p).toContain('codex exec -s workspace-write --cd "/tmp/wt"');
+    expect(p).toContain("--dangerously-skip-permissions --print-timeout 9m30s --model gemini-3-pro");
+    for (const k of [1, 2, 3]) expect(p).toContain(`SKEPTIC-${k}-BRIEF`);
+  });
+
+  test("an inherit Agent seat renders no model line; a wrong seat count throws", () => {
+    const seats = resolveSkepticSeats(["codex"]); // seats 2..3 gap-fill to inherit
+    const p = reviewerPrompt(INPUT, "/tmp/input.json", TARGET, true, seats);
+    expect(p).toContain("Skeptic 2 -- Agent seat: one Agent tool call, `run_in_background: false`");
+    expect(p).not.toContain('`model: "inherit"`');
+    expect(() =>
+      reviewerPrompt(INPUT, "/tmp/input.json", TARGET, true, [{ kind: "agent", model: "haiku" }])
+    ).toThrow(/exactly 3 resolved skeptic seats/);
+  });
+
+  test("blindness: no seat token ever reaches a skeptic brief", () => {
+    const spawn = { runId: TARGET.runId, ticket: 7, stage: "skeptic" as const, attempt: 1 };
+    const b = skepticBrief(1, INPUT, "/tmp/input.json", "/tmp/sk1", spawn);
+    for (const token of [...AGENT_MODELS.filter((m) => m !== "inherit"), ...CLI_PROVIDERS, "antigravity"]) {
+      expect(b).not.toContain(token);
+    }
   });
 });
 

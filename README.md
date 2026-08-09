@@ -49,13 +49,47 @@ whole install: the repo root is the skill.
 From a session inside a checkout of the repo whose PR you want reviewed:
 
 ```
-/adversarial-review 123        # review PR #123
-/adversarial-review            # review the current branch's open PR
+/z-adversarial-review 123      # review PR #123
+/z-adversarial-review          # review the current branch's open PR
+/z-adversarial-review setup    # validate the cross-provider skeptic fleet
 ```
 
 Ask for "single pass" or "with skeptics" to override the automatic fan-out
 decision. The review is read-only; posting the report as a PR comment happens
 only when you explicitly ask.
+
+## Cross-provider skeptics (per-seat model selection)
+
+Three skeptics on one model share that model's blind spots. Each skeptic
+seat can instead run on another vendor's locally installed CLI — OpenAI's
+`codex`, Google's `gemini`, or Antigravity's `agy` — or on a named Claude
+model via the Agent tool. Ask for it in words ("skeptics on codex, gemini,
+agy") or pass the flags yourself:
+
+```bash
+bin/adversarial-review prepare ... --skeptic-models '["codex","gemini","agy"]'
+bin/adversarial-review prepare ... --skeptic-models '["codex"]'   # seats 2-3 stay Claude
+bin/adversarial-review prepare ... --reviewer-model opus          # reviewer is Claude-only
+```
+
+Tokens: `inherit` | `haiku` | `sonnet` | `opus` | `fable` (any seat), or
+`codex[:<model>]` | `gemini[:<model>]` | `agy[:<model>]` (alias
+`antigravity`; skeptic seats only — the reviewer's orchestration prompt is
+Claude-harness-specific). Fewer than three tokens gap-fill with `inherit`;
+no flags means all-Claude, byte-identical to the pre-feature behavior. A
+requested CLI missing from PATH fails `prepare` immediately, before any
+worktree is created. The verdict contract is provider-neutral: any process
+that writes a well-addressed `verdict.json` counts in the quorum, and a CLI
+seat that dies simply reports as a short quorum — never impersonated.
+
+`setup` validates the fleet before a review depends on it (binary + version,
+auth, folder trust; one row per provider; exit 0 all-green):
+
+```bash
+bin/adversarial-review setup            # deterministic, free
+bin/adversarial-review setup --trust    # write the codex trust entry (idempotent)
+bin/adversarial-review setup --probe    # opt-in live micro-call per CLI (paid)
+```
 
 You get a report: verdict (`REVIEW-APPROVE` / `REVIEW-FINDINGS` /
 `NEEDS-HUMAN` / `BLOCKED` / `CONFUSED`), confidence 0-100, the skeptic quorum
@@ -115,5 +149,12 @@ Before calling any change done: `bun test && bun run typecheck`.
 - A PR with no linked issue is reviewed against the author's own narrative,
   disclosed as such. Link PRs to issues (`Closes #N`) to give the reviewer an
   independent yardstick.
-- LLM calls (the review itself, the paid eval) run through your local Claude
-  Code session — this repo never calls a hosted model API.
+- LLM calls (the review itself, the paid eval) run through locally installed
+  CLIs — your Claude Code session, and for cross-provider skeptic seats the
+  `codex`/`gemini`/`agy` binaries you installed and authed. This repo never
+  calls a hosted model API itself.
+- CLI skeptics run under their own vendor's sandbox with permission prompts
+  skipped, inside a throwaway worktree of **the PR author's code** — the
+  same exposure the Claude reviewer already accepts by running the PR's
+  tests. Review code you would not execute at your peril, whatever the
+  provider.

@@ -14,9 +14,10 @@ import {
   extractAcceptanceCriteria,
   prepare,
 } from "../lib/review.ts";
+import { AGENT_MODELS, CLI_PROVIDERS, briefPath, type ProviderDeps } from "../lib/models.ts";
 import { REVIEWER_INPUT_KEYS } from "../lib/prompts.ts";
 import { isRunId } from "../lib/run-id.ts";
-import { VERDICT_SCHEMA_VERSION } from "../lib/verdict.ts";
+import { VERDICT_SCHEMA_VERSION, quorumFromDisk } from "../lib/verdict.ts";
 import { ZError } from "../lib/cli.ts";
 
 // -- fixture repo -------------------------------------------------------------
@@ -96,9 +97,24 @@ function prJson(
   return { prPath, outDir };
 }
 
-function runPrepare(n: number, overrides: Record<string, unknown> = {}, extraFlags: Record<string, string> = {}) {
+// Injected provider deps: every CLI binary "exists" and versions cleanly, so
+// prepare's preflight passes offline. Tests that exercise the miss inject
+// their own.
+const okDeps: ProviderDeps = {
+  run: () => ({ ok: true, stdout: "9.9.9", stderr: "" }),
+  which: (bin) => `/fake/bin/${bin}`,
+  env: {},
+  home: "/fake/home",
+};
+
+function runPrepare(
+  n: number,
+  overrides: Record<string, unknown> = {},
+  extraFlags: Record<string, string> = {},
+  deps: ProviderDeps = okDeps
+) {
   const { prPath, outDir } = prJson(n, overrides);
-  return prepare({ "pr-json": prPath, repo, "out-dir": outDir, ...extraFlags });
+  return prepare({ "pr-json": prPath, repo, "out-dir": outDir, ...extraFlags }, deps);
 }
 
 // -- acceptance-criteria extraction -------------------------------------------
@@ -259,6 +275,124 @@ describe("prepare", () => {
     expect(() => runPrepare(111, {}, { "adversarial-mode": "sometimes" })).toThrow(ZError);
   });
 });
+
+// -- per-seat model selection through prepare ---------------------------------
+
+describe("prepare per-seat models", () => {
+  // The manifest's full key set before this feature, pinned so AC1's "identical
+  // except the two new fields" stays checkable forever.
+  const LEGACY_MANIFEST_KEYS = [
+    "pr", "title", "url", "specSource", "acFound", "diffLines", "labels",
+    "adversarialMode", "adversarial", "runId", "runRoot", "verdictPath",
+    "inputPath", "promptPath", "diffPath", "worktreePath", "stub",
+  ];
+
+  test("no flags: manifest carries exactly the legacy keys plus the two defaults", () => {
+    const m = runPrepare(130);
+    expect(Object.keys(m).sort()).toEqual(
+      [...LEGACY_MANIFEST_KEYS, "reviewerModel", "skepticModels"].sort()
+    );
+    expect(m.reviewerModel).toBe("inherit");
+    expect(m.skepticModels).toEqual(["inherit", "inherit", "inherit"]);
+    // Default lineup renders the legacy prompt: no per-seat sections.
+    expect(readFileSync(m.promptPath, "utf8")).not.toContain("CLI seat");
+    cleanup(repo, m.worktreePath);
+  });
+
+  test("gap-fill through the flag: [\"codex\"] resolves seats 2..3 to inherit in the manifest", () => {
+    const m = runPrepare(131, {}, { "skeptic-models": '["codex"]' });
+    expect(m.skepticModels).toEqual(["codex", "inherit", "inherit"]);
+    cleanup(repo, m.worktreePath);
+  });
+
+  test("full CLI lineup: briefs written per CLI seat, exact commands in the prompt, blindness intact", () => {
+    const m = runPrepare(132, {}, {
+      "skeptic-models": '["codex","gemini","agy"]',
+      "reviewer-model": "fable",
+    });
+    expect(m.reviewerModel).toBe("fable");
+    expect(m.skepticModels).toEqual(["codex", "gemini", "agy"]);
+
+    const reviewerDir = dirname(m.verdictPath);
+    const prompt = readFileSync(m.promptPath, "utf8");
+    for (const [idx, provider] of (["codex", "gemini", "agy"] as const).entries()) {
+      const brief = readFileSync(briefPath(join(reviewerDir, `skeptic-${idx + 1}`)), "utf8");
+      expect(brief).toContain(`SKEPTIC ${idx + 1} of 3`);
+      expect(prompt).toContain(`CLI seat (${provider})`);
+      // Blindness: the brief never names any seat's model or provider.
+      for (const token of [...AGENT_MODELS.filter((t) => t !== "inherit"), ...CLI_PROVIDERS]) {
+        expect(brief).not.toContain(token);
+      }
+    }
+    // Blindness: the four-key input file carries no seat token either.
+    const inputRaw = readFileSync(m.inputPath, "utf8");
+    expect(Object.keys(JSON.parse(inputRaw)).sort()).toEqual([...REVIEWER_INPUT_KEYS].sort());
+    for (const token of [...AGENT_MODELS.filter((t) => t !== "inherit"), ...CLI_PROVIDERS]) {
+      expect(inputRaw).not.toContain(token);
+    }
+    cleanup(repo, m.worktreePath);
+  });
+
+  test("a single pass writes no brief files even for a CLI lineup", () => {
+    const m = runPrepare(133, { headRefOid: smallHeadSha }, { "skeptic-models": '["codex"]' });
+    expect(m.adversarial).toBe(false);
+    expect(existsSync(briefPath(join(dirname(m.verdictPath), "skeptic-1")))).toBe(false);
+    cleanup(repo, m.worktreePath);
+  });
+
+  test("fail-fast: a missing CLI aborts before any worktree or prompt write, naming the fix", () => {
+    const miss: ProviderDeps = { ...okDeps, which: () => null };
+    const wt = join(repo, ".worktrees", "review-pr-134");
+    expect(() => runPrepare(134, {}, { "skeptic-models": '["gemini"]' }, miss)).toThrow(
+      /"gemini" failed preflight: not found on PATH/
+    );
+    expect(existsSync(wt)).toBe(false);
+    expect(existsSync(join(root, "out-134", "prompt-pr-134.txt"))).toBe(false);
+  });
+
+  test("a CLI token in the reviewer seat and malformed flag JSON are named errors", () => {
+    expect(() => runPrepare(135, {}, { "reviewer-model": "codex" })).toThrow(
+      /reviewer seat runs on the Claude harness only/
+    );
+    expect(() => runPrepare(136, {}, { "skeptic-models": "codex" })).toThrow(/JSON array/);
+    expect(() => runPrepare(137, {}, { "skeptic-models": '["what"]' })).toThrow(/Unknown model token/);
+  });
+});
+
+// -- mock provider end-to-end (one parameterized mock, three invocations) -----
+
+describe("mock-provider verdicts count in the quorum", () => {
+  test.each(["codex", "gemini", "agy"] as const)("%s mock writes a countable skeptic verdict", (provider) => {
+    const n = { codex: 141, gemini: 142, agy: 143 }[provider];
+    const m = runPrepare(n, {}, { "skeptic-models": `["${provider}"]` });
+    const dir = join(dirname(m.verdictPath), "skeptic-1");
+    const brief = readFileSync(briefPath(dir), "utf8");
+    const mock = join(REPO_ROOT_FOR_MOCK, "evals", "reviewer", "mock-provider.sh");
+
+    // Mirror each adapter's real input mode: codex/gemini feed the brief on
+    // stdin, agy passes it as the -p argument.
+    const args = provider === "agy" ? ["bash", mock, provider, brief] : ["bash", mock, provider];
+    const p = Bun.spawnSync(args, {
+      stdin: provider === "agy" ? "ignore" : Buffer.from(brief),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(p.exitCode).toBe(0);
+    expect(p.stdout.toString()).toContain("verdict written");
+
+    const vp = join(dir, "verdict.json");
+    const q = quorumFromDisk([vp], m.runRoot, {
+      runId: m.runId,
+      ticket: n,
+      stage: "reviewer",
+      attempt: 1,
+    });
+    expect(q).toMatchObject({ received: 1, unrefuted: 1, invalid: [] });
+    cleanup(repo, m.worktreePath);
+  });
+});
+
+const REPO_ROOT_FOR_MOCK = join(import.meta.dir, "..");
 
 // -- collect ------------------------------------------------------------------
 
