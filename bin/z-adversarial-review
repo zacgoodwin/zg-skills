@@ -5,4 +5,7 @@
 # invocations are gated against an explicit allowlist).
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
+if [ "${1:-}" = "setup" ]; then
+  exec bun "$HERE/../lib/models.ts" "$@"
+fi
 exec bun "$HERE/../lib/review.ts" "$@"
