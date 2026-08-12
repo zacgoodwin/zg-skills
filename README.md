@@ -1,7 +1,7 @@
 # stack-ship
 
 Claude Code skill that ships the current stax (`st`) branch through a
-three-stage quality pipeline:
+four-stage quality pipeline:
 
 1. **Gate** — `roborev review --branch --wait`, then a fail-closed jq check
    over the review ledger. Any failing verdict, crashed review job, or schema
@@ -11,6 +11,9 @@ three-stage quality pipeline:
    commit per branch, PR created/updated with AI title and body.
 3. **Adversarial review** — [z-adversarial-review](https://github.com/zacgoodwin/z-adversarial-review)
    on the resulting PR with cross-provider skeptic seats (codex, agy, claude).
+4. **Version bump** — patch-bump the repo's root `VERSION` on the PR once the
+   verdict is mergeable. Skipped when the repo has no `VERSION` file or the
+   verdict is do-not-merge.
 
 Trigger in Claude Code: `/stack-ship`, "ship this branch". Flags: `--draft`,
 `--skip-adversarial`.
@@ -40,9 +43,10 @@ bash ~/.claude/skills/stack-ship/check-pipeline.sh
 - `SKILL.md` — the skill itself; the jq gate the agent runs lives here.
 - `check-pipeline.sh` — deterministic wiring check (<2s, offline except the
   local roborev daemon).
-- `tests/gate.sh` — package gate test. Extracts the jq gate from SKILL.md so
-  the tested program is exactly the shipped one, and asserts pass/fail
-  fixtures (F verdicts, crashed jobs, schema drift, null payloads).
+- `tests/gate.sh` — package gate test. Extracts the jq gate and the
+  version-bump line from SKILL.md so the tested programs are exactly the
+  shipped ones, and asserts pass/fail fixtures (F verdicts, crashed jobs,
+  schema drift, null payloads, semver patch bumps).
 - `setup` — idempotent pack setup for bootstrap installers; just runs the
   gate test.
 

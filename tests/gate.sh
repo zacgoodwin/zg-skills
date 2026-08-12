@@ -42,4 +42,22 @@ else
   expect fail '{}'                                         "non-array response"
 fi
 
+# The version-bump line published in SKILL.md, tested byte-for-byte like the
+# jq gate: extract the printf that rewrites VERSION and run it on fixtures.
+bump=$(grep -o "printf .*> VERSION" SKILL.md | head -1)
+if [ -z "$bump" ]; then
+  bad "could not extract version-bump line from SKILL.md"
+else
+  ok "version-bump line extracted from SKILL.md"
+  bump_case() { # input expected
+    local d got; d=$(mktemp -d)
+    ( cd "$d" && v="$1" && eval "$bump" )
+    got=$(cat "$d/VERSION" 2>/dev/null)
+    rm -rf "$d"
+    [ "$got" = "$2" ] && ok "bump $1 -> $2" || bad "bump $1 expected $2 got '$got'"
+  }
+  bump_case 1.2.3 1.2.4
+  bump_case 0.9.9 0.9.10
+fi
+
 exit $fail

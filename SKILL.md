@@ -3,14 +3,16 @@ name: stack-ship
 description: >-
   Ship the current stax branch through the quality pipeline: gate on roborev
   per-commit reviews (bounded auto-fix loop on failure), squash-submit one
-  clean commit upstream as a PR via stax, then run blinded cross-provider
-  adversarial review on that PR. Use when asked to "stack-ship", "ship this
-  branch", or to present a stacked branch upstream for review.
+  clean commit upstream as a PR via stax, run blinded cross-provider
+  adversarial review on that PR, then patch-bump VERSION on the shipped PR.
+  Use when asked to "stack-ship", "ship this branch", or to present a stacked
+  branch upstream for review.
 ---
 
 # stack-ship
 
-Pipeline: roborev gate → `st stack submit --squash` → `/z-adversarial-review`.
+Pipeline: roborev gate → `st stack submit --squash` → `/z-adversarial-review`
+→ version bump.
 Never submit on a red gate. Arguments: `--draft` (open the PR as a draft),
 `--skip-adversarial` (stop after submit; state in the report that adversarial
 review was skipped and why).
@@ -102,11 +104,35 @@ codex, agy, claude — i.e. `--skeptic-models '["codex","agy","inherit"]'`
 (`inherit` = the Claude seat). Skipped only when `--skip-adversarial` was
 passed.
 
-## 5. Report
+## 5. Version bump — only on a shippable verdict
+
+Patch-bump the shipping repo's root `VERSION` after the adversarial verdict
+comes back mergeable, so the shipped diff carries its own version. With
+`--skip-adversarial`, bump right after submit. Skip the bump (and say why in
+the report) when the verdict is do-not-merge or when the repo has no root
+`VERSION` file.
+
+```bash
+# Bumps the last dot component (1.2.3 -> 1.2.4).
+# ponytail: dotless or suffixed versions (e.g. "3", "1.2.3-rc1") unsupported;
+# adopt a semver tool if a repo ever needs them.
+v="$(tr -d '[:space:]' < VERSION)"
+printf '%s\n' "${v%.*}.$(( ${v##*.} + 1 ))" > VERSION
+git add VERSION
+git commit -m "chore: bump version to $(cat VERSION)"
+st stack submit --squash --yes    # update the PR; no --ai, keep title/body
+```
+
+The bump commit re-triggers the roborev post-commit hook; its review lands
+after this run ends — normal, the next run's preflight drains it.
+
+## 6. Report
 
 - PR URL and draft/published state.
 - Gate: passed first try, or refine iterations used.
 - Adversarial verdict, confidence, and skeptic quorum (received/of).
+- New version after the bump, or why it was skipped (no VERSION file, or
+  do-not-merge verdict).
 - Whether local branch SHAs were rewritten by the squash (note it so the
   next session knows the ledger reset).
 - Completion status: exactly one of DONE (all steps ran, gate green,
