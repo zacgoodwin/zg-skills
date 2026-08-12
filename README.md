@@ -10,6 +10,8 @@ convention: each skill lives at `skills/<name>/SKILL.md`.
 |---|---|---|
 | [stack-ship](skills/stack-ship) | [![](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fzacgoodwin%2Fzg-skills%2Fmain%2Fskills%2Fstack-ship%2FVERSION&query=%24&label=)](skills/stack-ship/CHANGELOG.md) | Ships a stax branch through a roborev gate, squash-submit, adversarial review, and version bump. |
 | [z-adversarial-review](skills/z-adversarial-review) | [![](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fzacgoodwin%2Fzg-skills%2Fmain%2Fskills%2Fz-adversarial-review%2Fpackage.json&query=%24.version&label=)](skills/z-adversarial-review/CHANGELOG.md) | Blinded adversarial review for any GitHub PR: one fresh reviewer, three skeptics, verdicts as files. |
+| [dev-as-ai](skills/dev-as-ai) | [![](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fzacgoodwin%2Fzg-skills%2Fmain%2Fskills%2Fdev-as-ai%2FVERSION&query=%24&label=)](skills/dev-as-ai/CHANGELOG.md) | Switches this repo's commit identity and the `gh` CLI account to the AI dev bot. |
+| [dev-as-human](skills/dev-as-human) | [![](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fzacgoodwin%2Fzg-skills%2Fmain%2Fskills%2Fdev-as-human%2FVERSION&query=%24&label=)](skills/dev-as-human/CHANGELOG.md) | Switches them back to the human account. |
 
 `stack-ship` invokes `z-adversarial-review` as part of its pipeline, but
 each skill is self-contained (own tests, own version, own CHANGELOG) and
@@ -28,6 +30,8 @@ Install one skill:
 ```bash
 npx skills add zacgoodwin/zg-skills --skill stack-ship
 npx skills add zacgoodwin/zg-skills --skill z-adversarial-review
+npx skills add zacgoodwin/zg-skills --skill dev-as-ai
+npx skills add zacgoodwin/zg-skills --skill dev-as-human
 ```
 
 Or clone straight into Claude Code's skills directory the way the previous
@@ -35,7 +39,7 @@ standalone repos did:
 
 ```bash
 git clone --filter=blob:none --sparse https://github.com/zacgoodwin/zg-skills.git ~/.claude/skills/zg-skills
-cd ~/.claude/skills/zg-skills && git sparse-checkout set skills/stack-ship skills/z-adversarial-review
+cd ~/.claude/skills/zg-skills && git sparse-checkout set skills/stack-ship skills/z-adversarial-review skills/dev-as-ai skills/dev-as-human
 ```
 
 ## Layout
@@ -44,6 +48,8 @@ cd ~/.claude/skills/zg-skills && git sparse-checkout set skills/stack-ship skill
 skills/
   stack-ship/              SKILL.md, README.md, VERSION, CHANGELOG.md, tests/
   z-adversarial-review/    SKILL.md, README.md, package.json (version), CHANGELOG.md, bin/, lib/, tests/, evals/, docs/
+  dev-as-ai/               SKILL.md, README.md, VERSION, CHANGELOG.md, tests/
+  dev-as-human/            SKILL.md, README.md, VERSION, CHANGELOG.md, tests/
 scripts/
   bump-version.sh           bump a skill's VERSION or package.json version
   release-ci.sh             CI step: tag + release any skill not yet tagged

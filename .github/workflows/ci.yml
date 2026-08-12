@@ -12,6 +12,8 @@ jobs:
     outputs:
       stack-ship: ${{ steps.filter.outputs.stack-ship }}
       z-adversarial-review: ${{ steps.filter.outputs.z-adversarial-review }}
+      dev-as-ai: ${{ steps.filter.outputs.dev-as-ai }}
+      dev-as-human: ${{ steps.filter.outputs.dev-as-human }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -22,6 +24,10 @@ jobs:
               - 'skills/stack-ship/**'
             z-adversarial-review:
               - 'skills/z-adversarial-review/**'
+            dev-as-ai:
+              - 'skills/dev-as-ai/**'
+            dev-as-human:
+              - 'skills/dev-as-human/**'
 
   stack-ship:
     needs: changes
@@ -47,3 +53,25 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun test
+
+  dev-as-ai:
+    needs: changes
+    if: needs.changes.outputs.dev-as-ai == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: skills/dev-as-ai
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash tests/gate.sh
+
+  dev-as-human:
+    needs: changes
+    if: needs.changes.outputs.dev-as-human == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: skills/dev-as-human
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash tests/gate.sh
