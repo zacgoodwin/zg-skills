@@ -6,6 +6,7 @@ on:
     paths:
       - 'skills/*/VERSION'
       - 'skills/*/package.json'
+  workflow_dispatch: {}
 
 permissions:
   contents: write
