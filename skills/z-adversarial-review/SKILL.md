@@ -6,9 +6,11 @@ description: |
   fresh reviewer agent holding nothing else, fans out 3 independent skeptic
   sub-agents on non-trivial diffs, and reports a confidence-scored verdict
   with the skeptic quorum counted off disk. Skeptic seats can run on other
-  vendors' CLIs (codex, gemini, agy) for cross-provider blind spots; the
-  setup verb validates that fleet. Read-only by default; posting the review
-  to the PR is an explicit opt-in.
+  vendors' CLIs (codex, agy) for cross-provider blind spots. On the first
+  ever run it asks which of those CLIs (if any) should staff the seats,
+  validates the choice, and saves it so later runs never ask again; the
+  setup verb re-validates that fleet on demand. Read-only by default;
+  posting the review to the PR is an explicit opt-in.
   Use when asked to "z-adversarial-review", "adversarially review this PR",
   "review PR <N> with skeptics", or for a blinded second opinion on any pull
   request.
@@ -35,6 +37,55 @@ settle.
 **Prerequisites:** run from inside a git checkout of the repo under review;
 `bun` and an authenticated GitHub CLI on PATH.
 
+## Step 0 — First run: choose your skeptic fleet (once, ever)
+
+Before Step 1, check whether this user has already chosen a skeptic-seat
+lineup. It is a one-time, per-user choice — saved under
+`~/.claude/z-adversarial-review/` (`lib/models.ts preference`), not per-repo.
+Once saved, every future review reuses it silently and this step is a no-op.
+
+```bash
+PACK="$HOME/.claude/skills/z-adversarial-review"
+[ -d "$PACK" ] || PACK="$(cd "$(dirname "${BASH_SOURCE:-$0}")" && pwd -P)"
+bun "$PACK/lib/models.ts" preference
+```
+
+- `{"exists": true, ...}` — a choice is already saved. Skip straight to
+  Step 1; `prepare` loads the saved lineup automatically when you don't pass
+  `--skeptic-models` yourself. An explicit "skeptics on X" in the user's
+  current message still overrides it for this one run, same as always.
+- `{"exists": false, ...}` — first run, nothing saved yet.
+  - If the user's OWN phrasing this turn already names a lineup (see Step 1's
+    "Per-seat models"), use those tokens below instead of asking — you
+    already have the answer.
+  - Otherwise, before doing anything else, ask with the AskUserQuestion tool:
+    "Which outside CLIs should staff the skeptic seats?" with four options —
+    "Claude only (default)" (tokens `[]`), "codex only" (`["codex"]`), "agy
+    only" (`["agy"]`), "codex + agy" (`["codex","agy"]`). The answer's tokens
+    drive both steps below.
+
+**Validate before saving** (skip when the tokens are `[]` — nothing to
+validate for Claude-only). Pass only the CLI providers actually chosen,
+comma-separated:
+
+```bash
+bun "$PACK/lib/models.ts" setup --repo . --providers codex,agy
+```
+
+Relay the table as-is. A MISSING/FAILED row names its own fix — tell the
+user, but don't block on it: save the choice anyway (below) so they're asked
+only once, and let `prepare`'s own preflight (Step 1) enforce it with the
+same fix message on the run that actually needs that seat.
+
+**Save the choice**, so this is truly one-time:
+
+```bash
+bun "$PACK/lib/models.ts" preference --set '["codex","agy"]'
+```
+
+Then carry the same tokens into Step 1's `--skeptic-models` flag for this
+run — don't rely on the just-written file being re-read in the same turn.
+
 ## Step 1 — Assemble the blinded input (deterministic)
 
 `$PR_ARG` is the PR number from the user's invocation
@@ -43,18 +94,19 @@ open PR.
 
 **Per-seat models** (optional): map the user's phrasing to `prepare` flags.
 Tokens are `inherit`/`haiku`/`sonnet`/`opus`/`fable` (Agent tool, any seat)
-or `codex[:<model>]`/`gemini[:<model>]`/`agy[:<model>]` (CLI providers,
-skeptic seats only). Fewer than 3 skeptic tokens gap-fill with `inherit`.
+or `codex[:<model>]`/`agy[:<model>]` (CLI providers, skeptic seats only).
+Fewer than 3 skeptic tokens gap-fill with `inherit`. Pass nothing and
+`prepare` falls back to the Step 0 saved preference on its own.
 
-- "skeptics on codex, gemini, agy" → `--skeptic-models '["codex","gemini","agy"]'`
+- "skeptics on codex and agy" → `--skeptic-models '["codex","agy"]'` (seat 3 stays Claude)
 - "with a codex skeptic" / "with codex skeptics" → `--skeptic-models '["codex"]'` (seats 2-3 stay Claude)
 - "reviewer on opus" → `--reviewer-model opus` (Claude models only; CLI
   tokens are rejected here by design)
 
 A requested CLI provider missing from PATH fails `prepare` immediately with
-the install fix — relay that error; never substitute a seat silently. If the
-user plans to use CLI seats, `/z-adversarial-review setup` (below) is the
-precondition worth running once.
+the install fix — relay that error; never substitute a seat silently. Step 0
+already runs this validation once for a new user; `/z-adversarial-review
+setup` (below) re-runs it any time, e.g. after installing a CLI.
 
 ```bash
 PACK="$HOME/.claude/skills/z-adversarial-review"
@@ -120,7 +172,7 @@ The reviewer executes in the throwaway worktree (typecheck + the tests the
 diff touches), and on an adversarial pass launches its 3 skeptics itself,
 inside its own turn, exactly as its prompt directs per seat — Agent tool
 spawns from the verbatim briefs, and/or the exact composed CLI commands
-(codex/gemini/agy) run foreground through its Bash tool. Its final message
+(codex/agy) run foreground through its Bash tool. Its final message
 is just "verdict written" — the review itself lands as files. Expect several
 minutes of wall clock; that is the review running, not a hang.
 
@@ -183,7 +235,7 @@ bun "$PACK/lib/review.ts" cleanup --repo . --worktree "$WORKTREE"
 
 ## Setup — validate the cross-provider fleet
 
-`/z-adversarial-review setup` checks each CLI provider (codex, gemini, agy)
+`/z-adversarial-review setup` checks each CLI provider (codex, agy)
 BEFORE a review depends on it — binary on PATH + version, auth, folder
 trust. Deterministic, free, one row per provider; exit 0 all-green else 1:
 
@@ -194,13 +246,29 @@ bun "$PACK/lib/models.ts" setup --repo .
 ```
 
 - `--trust` — writes the codex `config.toml` trust entry for the repo root
-  (idempotent; prints exactly what it changed). gemini and agy need no
-  persisted trust: their adapters bypass per run.
+  (idempotent; prints exactly what it changed). agy needs no persisted
+  trust: its adapter bypasses per run.
 - `--probe` — opt-in live micro-call per CLI ("Reply with exactly OK"), the
   only paid check; run it only when the user asks for end-to-end proof.
+- `--providers codex,agy` — scope the table to a subset (Step 0 uses this to
+  validate only the providers the user actually picked).
 
 Relay the table as-is. A MISSING row names its own fix (install command,
 sign-in step, or the stale-session restart).
+
+This is what Step 0 runs automatically the first time a given user runs this
+skill; re-run it by hand any time — after installing a CLI, or if a skeptic
+seat starts failing — to re-check without touching the saved choice.
+
+**Changing the saved skeptic fleet**: the choice lives in one file
+(`lib/models.ts preference`); overwrite it directly rather than deleting it:
+
+```bash
+bun "$PACK/lib/models.ts" preference --set '["codex","agy"]'
+```
+
+`preference` with no `--set` prints the current saved choice
+(`{"exists": bool, "skepticModels": [...]}`) without changing anything.
 
 ## Honesty limits worth knowing
 

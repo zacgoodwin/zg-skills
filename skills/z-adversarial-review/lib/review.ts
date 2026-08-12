@@ -29,6 +29,7 @@ import {
   cliProvidersIn,
   parseReviewerSeat,
   preflightProviders,
+  readSkepticPreference,
   realDeps,
   resolveSkepticSeats,
   seatToken,
@@ -261,6 +262,12 @@ export function prepare(
       throw new ZError(`--skeptic-models must be a JSON array of 0-3 tokens (strings).`);
     }
     tokens = parsed as string[];
+  } else {
+    // No explicit flag this run: fall back to the user's saved first-run
+    // choice (lib/models.ts preference), if any. Absent a saved preference
+    // this resolves to [] -- all-inherit, byte-identical to the pre-feature
+    // default.
+    tokens = readSkepticPreference(deps)?.skepticModels ?? [];
   }
   const skepticSeats: Seat[] = resolveSkepticSeats(tokens);
   preflightProviders(cliProvidersIn(skepticSeats), deps);
@@ -490,8 +497,10 @@ const USAGE = `review <command> [args]
       pr.json:    gh pr view output with fields ${PR_FIELDS}
       issue.json: optional linked-issue fetch with fields body,labels
       Seat tokens: inherit|haiku|sonnet|opus|fable (Agent tool), or
-      codex[:<m>]|gemini[:<m>]|agy[:<m>] (skeptic seats only; preflighted).
+      codex[:<m>]|agy[:<m>] (skeptic seats only; preflighted).
       Short lineups gap-fill with inherit; see lib/models.ts setup.
+      --skeptic-models absent (not "[]") falls back to the saved first-run
+      choice from lib/models.ts preference, if one exists.
 
   collect --verdict <verdict.json> --run-root <dir> --run <runId> --ticket <n>
       Validate the reviewer's verdict file against the spawn prepare minted

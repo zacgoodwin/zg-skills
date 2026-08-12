@@ -28,7 +28,9 @@ Restart Claude Code, open a session inside the repo under review, and:
 /z-adversarial-review 123
 ```
 
-Claude runs `prepare`, spawns the blinded reviewer, runs `collect`, renders
+The very first time, Claude asks which outside CLIs (if any) should staff
+the skeptic seats and remembers your answer — every review after that skips
+straight to `prepare`, spawns the blinded reviewer, runs `collect`, renders
 the report, and cleans up. The rest of this tutorial does those same steps
 by hand so you can see each one.
 
@@ -139,7 +141,7 @@ trail — every stage's `verdict.json` is there to read.
 Next steps:
 
 - Every flag, manifest field, and schema: [CLI reference](reference-cli.md)
-- Put skeptic seats on codex/gemini/agy:
+- Put skeptic seats on codex/agy:
   [cross-provider how-to](howto-cross-provider-skeptics.md)
 - Why it's built this way: [design explanation](explanation-design.md)
 - Verify the fan-out earns its cost: [eval how-to](howto-run-the-eval.md)

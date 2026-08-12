@@ -2,9 +2,9 @@
 
 The deterministic core behind the `/z-adversarial-review` skill, callable
 directly. One entry script, `bin/z-adversarial-review`, dispatches to two
-bun modules: `setup` goes to `lib/models.ts`, everything else to
-`lib/review.ts`. Two more modules (`lib/prompts.ts`, `lib/verdict.ts`) carry
-their own debug CLIs, used by the eval harness and hand debugging.
+bun modules: `setup` and `preference` go to `lib/models.ts`, everything else
+to `lib/review.ts`. Two more modules (`lib/prompts.ts`, `lib/verdict.ts`)
+carry their own debug CLIs, used by the eval harness and hand debugging.
 
 All commands print an actionable one-line message and exit 1 on expected
 failures (a `ZError`); anything else is a bug and rethrows with its stack.
@@ -47,7 +47,7 @@ only), and writes the reviewer prompt.
 
 ```
 inherit | haiku | sonnet | opus | fable          # Agent tool, any seat
-codex[:<model>] | gemini[:<model>] | agy[:<model>]   # CLI providers, skeptic seats only
+codex[:<model>] | agy[:<model>]                 # CLI providers, skeptic seats only
 ```
 
 `antigravity` is an accepted alias for `agy` (normalized in the manifest).
@@ -175,27 +175,53 @@ including failed ones.
 ## `setup`
 
 ```bash
-bin/z-adversarial-review setup [--repo <dir>] [--trust] [--probe]
+bin/z-adversarial-review setup [--repo <dir>] [--trust] [--probe] [--providers <csv>]
 ```
 
-Validates the cross-provider skeptic fleet (`codex`, `gemini`, `agy`): one
-row per provider with binary (+ version), auth, and folder-trust status.
+Validates the cross-provider skeptic fleet (`codex`, `agy`): one row per
+provider with binary (+ version), auth, and folder-trust status.
 Exit 0 all-green, else 1 (scriptable). `--repo` defaults to `.`.
 
-| Check | codex | gemini | agy |
-|---|---|---|---|
-| Binary | `codex --version` | `gemini --version` | `agy --version` |
-| Auth | `codex login status` | credentials file under `~/.gemini` (`oauth_creds.json` or `google_accounts.json`) or `GEMINI_API_KEY` | `agy models` |
-| Trust | `[projects."<repo-root>"] trust_level = "trusted"` in `~/.codex/config.toml` | bypassed per run (`--skip-trust`) | bypassed per run (`--dangerously-skip-permissions`) |
+| Check | codex | agy |
+|---|---|---|
+| Binary | `codex --version` | `agy --version` |
+| Auth | `codex login status` | `agy models` |
+| Trust | `[projects."<repo-root>"] trust_level = "trusted"` in `~/.codex/config.toml` | bypassed per run (`--dangerously-skip-permissions`) |
 
 - `--trust` — writes the codex trust entry for the repo root. Idempotent
   (existing entry untouched, both TOML string forms recognized), append-only,
   and refuses to touch a config it cannot read. Prints exactly what changed.
 - `--probe` — opt-in live micro-call per green provider ("Reply with exactly
   OK"). The only paid check; end-to-end auth proof.
+- `--providers codex,agy` — scope the table to a comma-separated subset
+  instead of the full fleet. Order doesn't matter; an unrecognized name is a
+  named error. The skill's first-run flow uses this to validate only the
+  providers the user actually picked.
 
 See [how to run skeptic seats on other vendors' CLIs](howto-cross-provider-skeptics.md)
 for the workflow around this verb.
+
+## `preference`
+
+```bash
+bin/z-adversarial-review preference [--set '<json array of 0-3 seat tokens>']
+```
+
+Reads or writes the per-user saved skeptic-seat lineup that backs the
+skill's first-run chooser (Step 0 of `SKILL.md`). Stored at
+`~/.claude/z-adversarial-review/skeptic-preference.json` — global to the
+user, not the repo, since a CLI login is a per-machine fact.
+
+- No `--set`: prints `{"exists": bool, "skepticModels": [...]}`.
+  `exists: false` means nothing has been chosen yet — the skill's Step 0
+  treats that as "first run" and asks.
+- `--set '[...]'`: validates the tokens (same grammar as `prepare`'s
+  `--skeptic-models`, 0–3 of them) and persists them, overwriting any
+  previous choice. Prints `{"saved": true, "skepticModels": [...]}`.
+
+`prepare` reads this file itself whenever `--skeptic-models` is **absent**
+from its own flags (not merely `'[]'`, which is an explicit override) — so
+once a preference is saved, no caller needs to thread it through by hand.
 
 ## Debug CLIs
 

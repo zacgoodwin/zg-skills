@@ -1,8 +1,8 @@
 // Per-seat model selection for the adversarial review: the seat-token
-// grammar, the gap-fill that resolves a short lineup to 3 seats, the three
-// cross-provider CLI adapters (codex / gemini / agy), the preflight that
-// fail-fasts prepare on a missing CLI, and the `setup` verb that validates
-// the provider fleet before a review ever depends on it.
+// grammar, the gap-fill that resolves a short lineup to 3 seats, the two
+// cross-provider CLI adapters (codex / agy), the preflight that fail-fasts
+// prepare on a missing CLI, and the `setup` verb that validates the provider
+// fleet before a review ever depends on it.
 //
 // The verdict contract is already provider-neutral (lib/verdict.ts): any
 // process that writes a well-addressed verdict.json counts. This file's job
@@ -23,7 +23,7 @@ export type AgentModel = (typeof AGENT_MODELS)[number];
 // CLI tokens: skeptic seats ONLY. The reviewer's orchestration prompt is
 // Claude-harness-specific (Agent tool mechanics, run_in_background
 // discipline), so the reviewer seat rejects these with a named error.
-export const CLI_PROVIDERS = ["codex", "gemini", "agy"] as const;
+export const CLI_PROVIDERS = ["codex", "agy"] as const;
 export type CliProvider = (typeof CLI_PROVIDERS)[number];
 const PROVIDER_ALIASES: Record<string, CliProvider> = { antigravity: "agy" };
 
@@ -35,7 +35,7 @@ export const SKEPTIC_SEAT_COUNT = 3;
 export const INHERIT_SEAT: Seat = { kind: "agent", model: "inherit" };
 
 export const TOKEN_GRAMMAR =
-  "inherit | haiku | sonnet | opus | fable | codex[:<model>] | gemini[:<model>] | agy[:<model>] (alias antigravity)";
+  "inherit | haiku | sonnet | opus | fable | codex[:<model>] | agy[:<model>] (alias antigravity)";
 
 // Provider model suffixes are spliced into a shell command; the charset is the
 // injection boundary, not a vendor catalog (unknown-but-well-formed models are
@@ -120,11 +120,10 @@ export function briefPath(skepticDir: string): string {
 // is a FILE (prepare writes it) so no prompt text rides the command line
 // except agy's, whose headless mode takes the prompt as an argument.
 //
-// gemini and agy sandbox READS to their granted directories, and the brief
-// points every skeptic at the blinded input file -- so those two are granted
-// the input file's directory as well as their own verdict dir. codex's
-// workspace-write sandbox restricts only writes, so its grant stays the
-// verdict dir alone.
+// agy sandboxes READS to its granted directories, and the brief points every
+// skeptic at the blinded input file -- so agy is granted the input file's
+// directory as well as its own verdict dir. codex's workspace-write sandbox
+// restricts only writes, so its grant stays the verdict dir alone.
 export function cliCommand(
   seat: Seat & { kind: "cli" },
   worktreePath: string,
@@ -138,9 +137,6 @@ export function cliCommand(
   switch (seat.provider) {
     case "codex":
       return `codex exec -s workspace-write --cd "${wt}" -c 'sandbox_workspace_write.writable_roots=["${dir}"]'${seat.model ? ` -m ${seat.model}` : ""} --skip-git-repo-check - < "${brief}"`;
-    case "gemini":
-      // --skip-trust = per-session folder trust, no config writes.
-      return `cd "${wt}" && gemini -y --skip-trust --include-directories "${dir},${inputDir}"${seat.model ? ` -m ${seat.model}` : ""} -p "Follow the review brief on stdin exactly." < "${brief}"`;
     case "agy":
       // --print-timeout raised from agy's 5m default to fit the Bash tool's 10-min cap.
       return `cd "${wt}" && agy -p "$(cat "${brief}")" --add-dir "${dir}" --add-dir "${inputDir}" --dangerously-skip-permissions --print-timeout 9m30s${seat.model ? ` --model ${seat.model}` : ""}`;
@@ -182,7 +178,6 @@ export function realDeps(): ProviderDeps {
 
 const INSTALL_HINTS: Record<CliProvider, string> = {
   codex: "npm install -g @openai/codex",
-  gemini: "npm install -g @google/gemini-cli",
   agy: "install Google Antigravity (ships the agy CLI): https://antigravity.google",
 };
 
@@ -303,27 +298,19 @@ function checkAuth(provider: CliProvider, deps: ProviderDeps): { ok: boolean; de
     const r = deps.run(["codex", "login", "status"]);
     return r.ok ? { ok: true, detail: "ok" } : { ok: false, detail: "not logged in -- run: codex login" };
   }
-  if (provider === "agy") {
-    const r = deps.run(["agy", "models"]);
-    return r.ok ? { ok: true, detail: "ok" } : { ok: false, detail: "not authed -- run agy once interactively to sign in" };
-  }
-  // gemini has no status subcommand; the credentials artifact under ~/.gemini
-  // (or an explicit API key in the environment) is the deterministic signal.
-  const geminiDir = join(deps.home, ".gemini");
-  const artifacts = ["oauth_creds.json", "google_accounts.json"].map((f) => join(geminiDir, f));
-  if (artifacts.some((p) => existsSync(p)) || deps.env["GEMINI_API_KEY"]) return { ok: true, detail: "ok" };
-  return { ok: false, detail: `no credentials under ${geminiDir} -- run gemini once interactively to sign in` };
+  const r = deps.run(["agy", "models"]);
+  return r.ok ? { ok: true, detail: "ok" } : { ok: false, detail: "not authed -- run agy once interactively to sign in" };
 }
 
 export function setupCheck(
-  opts: { repo: string; trust: boolean; probe: boolean },
+  opts: { repo: string; trust: boolean; probe: boolean; providers?: CliProvider[] },
   deps: ProviderDeps = realDeps()
 ): SetupReport {
   const repoRoot = resolve(opts.repo);
   const actions: string[] = [];
   const rows: SetupRow[] = [];
 
-  for (const provider of CLI_PROVIDERS) {
+  for (const provider of opts.providers ?? CLI_PROVIDERS) {
     const bin = checkBinary(provider, deps);
     const row: SetupRow = {
       provider,
@@ -345,15 +332,14 @@ export function setupCheck(
         }
         row.trust = trusted ? "trusted" : `missing -- run: setup --trust (writes ${cfg})`;
       } else {
-        // gemini passes --skip-trust, agy passes --dangerously-skip-permissions:
-        // per-run bypass, nothing persisted, nothing to set up.
+        // agy passes --dangerously-skip-permissions: per-run bypass, nothing
+        // persisted, nothing to set up.
         row.trust = "bypassed-per-run";
       }
       row.green = auth.ok && !row.trust.startsWith("missing");
       if (opts.probe && row.green) {
         const probeCmd: Record<CliProvider, { cmd: string[]; stdin?: string }> = {
           codex: { cmd: ["codex", "exec", "--skip-git-repo-check", "-s", "read-only", "-"], stdin: "Reply with exactly OK" },
-          gemini: { cmd: ["gemini", "-p", "Reply with exactly OK"] },
           agy: { cmd: ["agy", "-p", "Reply with exactly OK"] },
         };
         const { cmd, stdin } = probeCmd[provider];
@@ -381,18 +367,83 @@ export function renderSetupTable(report: SetupReport): string {
   return out.join("\n");
 }
 
+// -- skeptic preference (first-run persisted choice) ---------------------------
+
+// Remembers which skeptic seats the user picked the first time a review ran,
+// so later runs don't ask again. Global to the user (a CLI login is a
+// per-machine fact, not a per-repo one) -- deliberately NOT under `PACK`,
+// which may just be a dev checkout. Raw tokens, ungapfilled, so a saved
+// preference round-trips through --skeptic-models unchanged.
+export function preferencePath(deps: ProviderDeps): string {
+  return join(deps.home, ".claude", "z-adversarial-review", "skeptic-preference.json");
+}
+
+export interface SkepticPreference {
+  skepticModels: string[];
+}
+
+// Absent file, unreadable JSON, or the wrong shape all mean "no preference
+// yet" -- i.e. first run -- never a thrown error.
+export function readSkepticPreference(deps: ProviderDeps = realDeps()): SkepticPreference | null {
+  const p = preferencePath(deps);
+  if (!existsSync(p)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(p, "utf8"));
+    if (!Array.isArray(raw.skepticModels) || raw.skepticModels.some((t: unknown) => typeof t !== "string")) {
+      return null;
+    }
+    return { skepticModels: raw.skepticModels };
+  } catch {
+    return null;
+  }
+}
+
+export function writeSkepticPreference(tokens: string[], deps: ProviderDeps = realDeps()): void {
+  tokens.forEach(parseSeatToken); // throws ZError naming the grammar on a bad token
+  if (tokens.length > SKEPTIC_SEAT_COUNT) {
+    throw new ZError(`Skeptic preference takes at most ${SKEPTIC_SEAT_COUNT} tokens, got ${tokens.length}.`);
+  }
+  const p = preferencePath(deps);
+  mkdirSync(dirname(p), { recursive: true });
+  writeFileSync(p, JSON.stringify({ skepticModels: tokens }, null, 2));
+}
+
+// Comma-separated provider subset for `setup --providers`, e.g. "codex,agy".
+// Each name is validated against CLI_PROVIDERS by name (no alias expansion --
+// this selects rows in the setup TABLE, not seat tokens).
+export function parseProvidersCsv(raw: string): CliProvider[] {
+  const providers = raw.split(",").map((s) => s.trim()) as CliProvider[];
+  for (const p of providers) {
+    if (!(CLI_PROVIDERS as readonly string[]).includes(p)) {
+      throw new ZError(`--providers: unknown provider ${JSON.stringify(p)}. Allowed: ${CLI_PROVIDERS.join(", ")}.`);
+    }
+  }
+  return providers;
+}
+
 // -- CLI ----------------------------------------------------------------------
 
 const USAGE = `models <command> [args]
 
-  setup [--repo <dir>] [--trust] [--probe]
-      Validate the cross-provider skeptic fleet (codex, gemini, agy): binary on
-      PATH + --version, auth, and folder trust. Prints one row per provider;
+  setup [--repo <dir>] [--trust] [--probe] [--providers <csv>]
+      Validate the cross-provider skeptic fleet (codex, agy): binary on PATH
+      + --version, auth, and folder trust. Prints one row per provider;
       exit 0 all-green, else 1 (scriptable).
-      --trust  write the codex config.toml trust entry for the repo root
-               (idempotent; prints exactly what it changed)
-      --probe  opt-in live micro-call per CLI ("Reply with exactly OK") --
-               the only paid check; end-to-end auth proof`;
+      --trust      write the codex config.toml trust entry for the repo root
+                   (idempotent; prints exactly what it changed)
+      --probe      opt-in live micro-call per CLI ("Reply with exactly OK") --
+                   the only paid check; end-to-end auth proof
+      --providers  comma-separated subset of codex,agy to check (default:
+                   both) -- used to validate only the providers a user just
+                   picked
+
+  preference [--set '<json array of 0-3 seat tokens>']
+      No --set: prints the saved skeptic-seat choice as
+      {"exists": bool, "skepticModels": [...]} -- exists:false means first
+      run, nothing chosen yet.
+      --set: validates and persists the lineup (same grammar as
+      --skeptic-models) to a per-user file, so later reviews default to it
+      without asking again.`;
 
 export function main(argv: string[]): number {
   const cmd = argv[0];
@@ -403,13 +454,36 @@ export function main(argv: string[]): number {
   try {
     const { flags } = parseFlags(argv.slice(1), ["trust", "probe"]);
     if (cmd === "setup") {
+      const providersRaw = str(flags, "providers");
+      const providers = providersRaw !== undefined ? parseProvidersCsv(providersRaw) : undefined;
       const report = setupCheck({
         repo: str(flags, "repo") ?? ".",
         trust: flags["trust"] === true,
         probe: flags["probe"] === true,
+        providers,
       });
       console.log(renderSetupTable(report));
       return report.ok ? 0 : 1;
+    }
+    if (cmd === "preference") {
+      const setRaw = str(flags, "set");
+      if (setRaw !== undefined) {
+        let tokens: unknown;
+        try {
+          tokens = JSON.parse(setRaw);
+        } catch (e) {
+          throw new ZError(`--set must be a JSON array of 0-3 tokens: ${(e as Error).message}`);
+        }
+        if (!Array.isArray(tokens) || tokens.some((t) => typeof t !== "string")) {
+          throw new ZError(`--set must be a JSON array of 0-3 tokens (strings).`);
+        }
+        writeSkepticPreference(tokens as string[]);
+        console.log(JSON.stringify({ saved: true, skepticModels: tokens }, null, 2));
+        return 0;
+      }
+      const pref = readSkepticPreference();
+      console.log(JSON.stringify({ exists: pref !== null, skepticModels: pref?.skepticModels ?? [] }, null, 2));
+      return 0;
     }
     console.error(`Unknown command "${cmd}".\n\n${USAGE}`);
     return 1;

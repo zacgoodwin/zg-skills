@@ -1,23 +1,27 @@
 // Gate tests for lib/models.ts: the seat-token grammar, the gap-fill, the
-// reviewer-seat rejection, the three CLI adapter commands, the preflight
+// reviewer-seat rejection, the two CLI adapter commands, the preflight
 // fail-fast, and the setup verb's statuses -- all offline via injected deps.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   AGENT_MODELS,
   cliCommand,
   cliProvidersIn,
   codexTrustHeader,
   hasCodexTrust,
+  parseProvidersCsv,
   parseReviewerSeat,
   parseSeatToken,
+  preferencePath,
   preflightProviders,
+  readSkepticPreference,
   resolveSkepticSeats,
   seatToken,
   setupCheck,
   writeCodexTrust,
+  writeSkepticPreference,
   type ProviderDeps,
   type Seat,
 } from "../lib/models.ts";
@@ -54,10 +58,10 @@ describe("parseSeatToken", () => {
 
   test("bare and model-suffixed CLI tokens parse; antigravity aliases to agy", () => {
     expect(parseSeatToken("codex")).toEqual({ kind: "cli", provider: "codex" });
-    expect(parseSeatToken("gemini:gemini-2.5-flash")).toEqual({
+    expect(parseSeatToken("agy:gemini-3-pro")).toEqual({
       kind: "cli",
-      provider: "gemini",
-      model: "gemini-2.5-flash",
+      provider: "agy",
+      model: "gemini-3-pro",
     });
     expect(parseSeatToken("antigravity:gemini-3-pro")).toEqual({
       kind: "cli",
@@ -94,12 +98,12 @@ describe("resolveSkepticSeats", () => {
   });
 
   test("k=2 and k=3 keep seat order", () => {
-    expect(resolveSkepticSeats(["gemini", "haiku"]).map(seatToken)).toEqual(["gemini", "haiku", "inherit"]);
-    expect(resolveSkepticSeats(["codex", "gemini", "agy"]).map(seatToken)).toEqual(["codex", "gemini", "agy"]);
+    expect(resolveSkepticSeats(["agy", "haiku"]).map(seatToken)).toEqual(["agy", "haiku", "inherit"]);
+    expect(resolveSkepticSeats(["codex", "agy", "opus"]).map(seatToken)).toEqual(["codex", "agy", "opus"]);
   });
 
   test("more than 3 tokens is a named error", () => {
-    expect(() => resolveSkepticSeats(["codex", "gemini", "agy", "haiku"])).toThrow(/at most 3 tokens/);
+    expect(() => resolveSkepticSeats(["codex", "agy", "opus", "haiku"])).toThrow(/at most 3 tokens/);
   });
 });
 
@@ -135,18 +139,12 @@ describe("cliCommand", () => {
     expect(cliCommand({ kind: "cli", provider: "codex", model: "o3" }, WT, DIR, INPUT_PATH)).toContain(" -m o3 ");
   });
 
-  test("gemini: yolo + per-run trust bypass, verdict dir AND input dir included, brief on stdin, cwd = worktree", () => {
-    const c = cliCommand({ kind: "cli", provider: "gemini" }, WT, DIR, INPUT_PATH);
-    expect(c).toBe(
-      `cd "D:/repo/.worktrees/review-pr-9" && gemini -y --skip-trust --include-directories "D:/out/runs/r/t9/reviewer-1/skeptic-1,D:/out" -p "Follow the review brief on stdin exactly." < "D:/out/runs/r/t9/reviewer-1/skeptic-1/brief.txt"`
-    );
-  });
-
   test("agy: brief as the -p argument, verdict AND input dirs added, permissions skipped per-run, print timeout under the Bash cap", () => {
     const c = cliCommand({ kind: "cli", provider: "agy", model: "gemini-3-pro" }, WT, DIR, INPUT_PATH);
     expect(c).toBe(
       `cd "D:/repo/.worktrees/review-pr-9" && agy -p "$(cat "D:/out/runs/r/t9/reviewer-1/skeptic-1/brief.txt")" --add-dir "D:/out/runs/r/t9/reviewer-1/skeptic-1" --add-dir "D:/out" --dangerously-skip-permissions --print-timeout 9m30s --model gemini-3-pro`
     );
+    expect(cliCommand({ kind: "cli", provider: "agy" }, WT, DIR, INPUT_PATH)).not.toContain("--model");
   });
 });
 
@@ -154,7 +152,7 @@ describe("cliCommand", () => {
 
 describe("preflightProviders", () => {
   test("all binaries present and versioned: silence", () => {
-    expect(() => preflightProviders(["codex", "gemini", "agy"], fakeDeps())).not.toThrow();
+    expect(() => preflightProviders(["codex", "agy"], fakeDeps())).not.toThrow();
   });
 
   test("a missing binary names the CLI and the install fix", () => {
@@ -217,8 +215,6 @@ describe("setupCheck", () => {
 
   test("all installed + authed + trusted: every row green, exit-ok", () => {
     const home = join(scratch, "home-green");
-    mkdirSync(join(home, ".gemini"), { recursive: true });
-    writeFileSync(join(home, ".gemini", "oauth_creds.json"), "{}");
     mkdirSync(join(home, ".codex"), { recursive: true });
     writeFileSync(
       join(home, ".codex", "config.toml"),
@@ -226,10 +222,9 @@ describe("setupCheck", () => {
     );
     const r = setupCheck({ repo, trust: false, probe: false }, fakeDeps({ home }));
     expect(r.ok).toBe(true);
-    expect(r.rows.map((x) => x.provider)).toEqual(["codex", "gemini", "agy"]);
+    expect(r.rows.map((x) => x.provider)).toEqual(["codex", "agy"]);
     expect(r.rows[0].trust).toBe("trusted");
     expect(r.rows[1].trust).toBe("bypassed-per-run");
-    expect(r.rows[2].trust).toBe("bypassed-per-run");
   });
 
   test("missing binary: row named MISSING, not green, auth not attempted", () => {
@@ -243,7 +238,7 @@ describe("setupCheck", () => {
   });
 
   test("unauthed provider: binary ok, auth MISSING with the fix, not green", () => {
-    const home = join(scratch, "home-unauthed"); // no ~/.gemini artifact
+    const home = join(scratch, "home-unauthed");
     mkdirSync(home, { recursive: true });
     const deps = fakeDeps({
       home,
@@ -254,13 +249,11 @@ describe("setupCheck", () => {
     expect(r.ok).toBe(false);
     expect(r.rows[0].auth).toContain("codex login");
     expect(r.rows[1].auth).toContain("sign in");
-    expect(r.rows[2].auth).toContain("sign in");
   });
 
   test("--trust writes the codex entry once and reports exactly what changed", () => {
     const home = join(scratch, "home-trust");
-    mkdirSync(join(home, ".gemini"), { recursive: true });
-    writeFileSync(join(home, ".gemini", "google_accounts.json"), "{}");
+    mkdirSync(home, { recursive: true });
     const deps = fakeDeps({ home });
     const first = setupCheck({ repo, trust: true, probe: false }, deps);
     expect(first.actions).toHaveLength(1);
@@ -269,5 +262,82 @@ describe("setupCheck", () => {
     const second = setupCheck({ repo, trust: true, probe: false }, deps);
     expect(second.actions).toHaveLength(0); // idempotent
     expect(second.rows[0].trust).toBe("trusted");
+  });
+
+  test("--providers scopes the table to a chosen subset", () => {
+    const deps = fakeDeps({ home: join(scratch, "home-providers-filter") });
+    const r = setupCheck({ repo, trust: false, probe: false, providers: ["agy"] }, deps);
+    expect(r.rows.map((x) => x.provider)).toEqual(["agy"]);
+  });
+
+  test("no --providers still checks the full fleet (unchanged default)", () => {
+    const deps = fakeDeps({ home: join(scratch, "home-providers-default") });
+    const r = setupCheck({ repo, trust: false, probe: false }, deps);
+    expect(r.rows.map((x) => x.provider)).toEqual(["codex", "agy"]);
+  });
+});
+
+// -- providers CSV (setup --providers) -----------------------------------------
+
+describe("parseProvidersCsv", () => {
+  test("parses a comma-separated subset in order, trimming whitespace", () => {
+    expect(parseProvidersCsv("agy, codex")).toEqual(["agy", "codex"]);
+    expect(parseProvidersCsv("codex")).toEqual(["codex"]);
+  });
+
+  test("an unknown provider name is a named error", () => {
+    expect(() => parseProvidersCsv("codex,gemini")).toThrow(/unknown provider "gemini"/);
+  });
+});
+
+// -- skeptic preference (first-run persisted choice) ---------------------------
+
+describe("skeptic preference", () => {
+  test("no file yet: read returns null (first run)", () => {
+    const deps = fakeDeps({ home: join(scratch, "home-pref-none") });
+    expect(readSkepticPreference(deps)).toBeNull();
+  });
+
+  test("write then read round-trips the exact tokens, ungapfilled", () => {
+    const deps = fakeDeps({ home: join(scratch, "home-pref-roundtrip") });
+    writeSkepticPreference(["codex", "agy"], deps);
+    expect(readSkepticPreference(deps)).toEqual({ skepticModels: ["codex", "agy"] });
+  });
+
+  test("an empty array is a valid, persisted choice (explicit Claude-only)", () => {
+    const deps = fakeDeps({ home: join(scratch, "home-pref-empty") });
+    writeSkepticPreference([], deps);
+    expect(readSkepticPreference(deps)).toEqual({ skepticModels: [] });
+  });
+
+  test("an unknown token is rejected before anything is written", () => {
+    const deps = fakeDeps({ home: join(scratch, "home-pref-bad-token") });
+    expect(() => writeSkepticPreference(["not-a-token"], deps)).toThrow(/Allowed:/);
+    expect(readSkepticPreference(deps)).toBeNull();
+  });
+
+  test("more than 3 tokens is a named error", () => {
+    const deps = fakeDeps({ home: join(scratch, "home-pref-too-many") });
+    expect(() => writeSkepticPreference(["codex", "agy", "opus", "haiku"], deps)).toThrow(/at most 3 tokens/);
+  });
+
+  test("malformed JSON on disk reads back as null, never throws", () => {
+    const deps = fakeDeps({ home: join(scratch, "home-pref-corrupt") });
+    mkdirSync(dirname(preferencePath(deps)), { recursive: true });
+    writeFileSync(preferencePath(deps), "not json");
+    expect(readSkepticPreference(deps)).toBeNull();
+  });
+
+  test("the wrong shape on disk (not a string array) reads back as null", () => {
+    const deps = fakeDeps({ home: join(scratch, "home-pref-wrong-shape") });
+    mkdirSync(dirname(preferencePath(deps)), { recursive: true });
+    writeFileSync(preferencePath(deps), JSON.stringify({ skepticModels: [1, 2] }));
+    expect(readSkepticPreference(deps)).toBeNull();
+  });
+
+  test("preferencePath is under the user's home, never the repo", () => {
+    expect(preferencePath({ ...fakeDeps(), home: "/fake/home" })).toBe(
+      join("/fake/home", ".claude", "z-adversarial-review", "skeptic-preference.json")
+    );
   });
 });

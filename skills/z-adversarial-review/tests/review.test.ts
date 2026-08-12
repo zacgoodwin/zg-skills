@@ -14,7 +14,7 @@ import {
   extractAcceptanceCriteria,
   prepare,
 } from "../lib/review.ts";
-import { AGENT_MODELS, CLI_PROVIDERS, briefPath, type ProviderDeps } from "../lib/models.ts";
+import { AGENT_MODELS, CLI_PROVIDERS, briefPath, writeSkepticPreference, type ProviderDeps } from "../lib/models.ts";
 import { REVIEWER_INPUT_KEYS } from "../lib/prompts.ts";
 import { isRunId } from "../lib/run-id.ts";
 import { VERDICT_SCHEMA_VERSION, quorumFromDisk } from "../lib/verdict.ts";
@@ -312,15 +312,15 @@ describe("prepare per-seat models", () => {
 
   test("full CLI lineup: briefs written per CLI seat, exact commands in the prompt, blindness intact", () => {
     const m = runPrepare(132, {}, {
-      "skeptic-models": '["codex","gemini","agy"]',
+      "skeptic-models": '["codex","agy","agy:gemini-3-pro"]',
       "reviewer-model": "fable",
     });
     expect(m.reviewerModel).toBe("fable");
-    expect(m.skepticModels).toEqual(["codex", "gemini", "agy"]);
+    expect(m.skepticModels).toEqual(["codex", "agy", "agy:gemini-3-pro"]);
 
     const reviewerDir = dirname(m.verdictPath);
     const prompt = readFileSync(m.promptPath, "utf8");
-    for (const [idx, provider] of (["codex", "gemini", "agy"] as const).entries()) {
+    for (const [idx, provider] of (["codex", "agy", "agy"] as const).entries()) {
       const brief = readFileSync(briefPath(join(reviewerDir, `skeptic-${idx + 1}`)), "utf8");
       expect(brief).toContain(`SKEPTIC ${idx + 1} of 3`);
       expect(prompt).toContain(`CLI seat (${provider})`);
@@ -348,8 +348,8 @@ describe("prepare per-seat models", () => {
   test("fail-fast: a missing CLI aborts before any worktree or prompt write, naming the fix", () => {
     const miss: ProviderDeps = { ...okDeps, which: () => null };
     const wt = join(repo, ".worktrees", "review-pr-134");
-    expect(() => runPrepare(134, {}, { "skeptic-models": '["gemini"]' }, miss)).toThrow(
-      /"gemini" failed preflight: not found on PATH/
+    expect(() => runPrepare(134, {}, { "skeptic-models": '["agy"]' }, miss)).toThrow(
+      /"agy" failed preflight: not found on PATH/
     );
     expect(existsSync(wt)).toBe(false);
     expect(existsSync(join(root, "out-134", "prompt-pr-134.txt"))).toBe(false);
@@ -362,20 +362,52 @@ describe("prepare per-seat models", () => {
     expect(() => runPrepare(136, {}, { "skeptic-models": "codex" })).toThrow(/JSON array/);
     expect(() => runPrepare(137, {}, { "skeptic-models": '["what"]' })).toThrow(/Unknown model token/);
   });
+
+  // -- first-run preference fallback -------------------------------------------
+
+  test("no flag but a saved preference: prepare resolves the saved lineup", () => {
+    const home = join(root, "home-pref-138");
+    mkdirSync(home, { recursive: true });
+    const deps = { ...okDeps, home };
+    writeSkepticPreference(["codex"], deps);
+    const m = runPrepare(138, {}, {}, deps);
+    expect(m.skepticModels).toEqual(["codex", "inherit", "inherit"]);
+    cleanup(repo, m.worktreePath);
+  });
+
+  test("an explicit --skeptic-models flag overrides a saved preference", () => {
+    const home = join(root, "home-pref-139");
+    mkdirSync(home, { recursive: true });
+    const deps = { ...okDeps, home };
+    writeSkepticPreference(["codex"], deps);
+    const m = runPrepare(139, {}, { "skeptic-models": '["agy"]' }, deps);
+    expect(m.skepticModels).toEqual(["agy", "inherit", "inherit"]);
+    cleanup(repo, m.worktreePath);
+  });
+
+  test("an explicit empty flag ('[]') overrides a saved preference back to all-inherit", () => {
+    const home = join(root, "home-pref-140");
+    mkdirSync(home, { recursive: true });
+    const deps = { ...okDeps, home };
+    writeSkepticPreference(["codex"], deps);
+    const m = runPrepare(140, {}, { "skeptic-models": "[]" }, deps);
+    expect(m.skepticModels).toEqual(["inherit", "inherit", "inherit"]);
+    cleanup(repo, m.worktreePath);
+  });
 });
 
-// -- mock provider end-to-end (one parameterized mock, three invocations) -----
+// -- mock provider end-to-end (one parameterized mock, two invocations) -------
 
 describe("mock-provider verdicts count in the quorum", () => {
-  test.each(["codex", "gemini", "agy"] as const)("%s mock writes a countable skeptic verdict", (provider) => {
-    const n = { codex: 141, gemini: 142, agy: 143 }[provider];
+  test.each(["codex", "agy"] as const)("%s mock writes a countable skeptic verdict", (provider) => {
+    const n = { codex: 141, agy: 143 }[provider];
     const m = runPrepare(n, {}, { "skeptic-models": `["${provider}"]` });
     const dir = join(dirname(m.verdictPath), "skeptic-1");
     const brief = readFileSync(briefPath(dir), "utf8");
     const mock = join(REPO_ROOT_FOR_MOCK, "evals", "reviewer", "mock-provider.sh");
 
-    // Mirror each adapter's real input mode: codex/gemini feed the brief on
-    // stdin, agy passes it as the -p argument.
+    // Mirror each adapter's real input mode: codex feeds the brief on stdin,
+    // agy passes it as the -p argument.
     const args = provider === "agy" ? ["bash", mock, provider, brief] : ["bash", mock, provider];
     const p = Bun.spawnSync(args, {
       stdin: provider === "agy" ? "ignore" : Buffer.from(brief),

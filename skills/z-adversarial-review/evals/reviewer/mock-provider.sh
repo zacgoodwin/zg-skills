@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Parameterized stand-in for a cross-provider skeptic CLI (codex | gemini |
-# agy), the provider-side sibling of mock-claude.sh. The real adapters feed
-# the brief to codex/gemini on STDIN and to agy as the -p ARGUMENT; this mock
+# Parameterized stand-in for a cross-provider skeptic CLI (codex | agy), the
+# provider-side sibling of mock-claude.sh. The real adapters feed the brief to
+# codex on STDIN and to agy as the -p ARGUMENT; this mock
 # mirrors that per-provider input mode, extracts the verdict path + envelope
 # from the brief's own exit contract, and writes the skeptic verdict file --
 # proving the contract's provider-neutrality end to end: any process that
 # writes a well-addressed verdict.json counts, zero changes to verdict code.
 set -euo pipefail
-PROVIDER="${1:?usage: mock-provider.sh <codex|gemini|agy> [brief-when-agy]}"
+PROVIDER="${1:?usage: mock-provider.sh <codex|agy> [brief-when-agy]}"
 case "$PROVIDER" in
   agy) BRIEF="${2:?the agy mock takes the brief as argument 2 (mirroring agy -p)}" ;;
-  codex|gemini) BRIEF="$(cat)" ;;
-  *) echo "unknown provider \"$PROVIDER\" (codex|gemini|agy)" >&2; exit 2 ;;
+  codex) BRIEF="$(cat)" ;;
+  *) echo "unknown provider \"$PROVIDER\" (codex|agy)" >&2; exit 2 ;;
 esac
 
 # Same extraction technique as mock-claude.sh: the path is the line two below

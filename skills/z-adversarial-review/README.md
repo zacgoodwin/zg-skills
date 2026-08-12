@@ -60,11 +60,17 @@ Ask for "single pass" or "with skeptics" to override the automatic fan-out
 decision. The review is read-only; posting the report as a PR comment happens
 only when you explicitly ask.
 
+The first time you ever run this skill, it asks which outside CLIs (if any —
+Claude-only is an option) should staff the three skeptic seats, validates the
+choice, and remembers it — every later review just uses it, no more asking.
+See [cross-provider skeptics](#cross-provider-skeptics-per-seat-model-selection)
+below to change that choice later.
+
 ## Documentation
 
 - [Tutorial: your first blinded review](docs/tutorial-first-review.md) — skill and by-hand CLI walkthrough, zero to verdict
 - [CLI reference](docs/reference-cli.md) — every verb, flag, manifest field, seat token, and the verdict file schema
-- [How to run skeptic seats on other vendors' CLIs](docs/howto-cross-provider-skeptics.md) — codex / gemini / agy setup and troubleshooting
+- [How to run skeptic seats on other vendors' CLIs](docs/howto-cross-provider-skeptics.md) — codex / agy setup and troubleshooting
 - [How to run the reviewer eval](docs/howto-run-the-eval.md) — free smoke, paid run, reading the report
 - [Why blinded, why skeptics, why files](docs/explanation-design.md) — the design rationale and its trade-offs
 
@@ -72,18 +78,18 @@ only when you explicitly ask.
 
 Three skeptics on one model share that model's blind spots. Each skeptic
 seat can instead run on another vendor's locally installed CLI — OpenAI's
-`codex`, Google's `gemini`, or Antigravity's `agy` — or on a named Claude
-model via the Agent tool. Ask for it in words ("skeptics on codex, gemini,
-agy") or pass the flags yourself:
+`codex` or Antigravity's `agy` — or on a named Claude model via the Agent
+tool. Ask for it in words ("skeptics on codex and agy") or pass the flags
+yourself:
 
 ```bash
-bin/z-adversarial-review prepare ... --skeptic-models '["codex","gemini","agy"]'
+bin/z-adversarial-review prepare ... --skeptic-models '["codex","agy"]'
 bin/z-adversarial-review prepare ... --skeptic-models '["codex"]'   # seats 2-3 stay Claude
 bin/z-adversarial-review prepare ... --reviewer-model opus          # reviewer is Claude-only
 ```
 
 Tokens: `inherit` | `haiku` | `sonnet` | `opus` | `fable` (any seat), or
-`codex[:<model>]` | `gemini[:<model>]` | `agy[:<model>]` (alias
+`codex[:<model>]` | `agy[:<model>]` (alias
 `antigravity`; skeptic seats only — the reviewer's orchestration prompt is
 Claude-harness-specific). Fewer than three tokens gap-fill with `inherit`;
 no flags means all-Claude, byte-identical to the pre-feature behavior. A
@@ -96,9 +102,19 @@ seat that dies simply reports as a short quorum — never impersonated.
 auth, folder trust; one row per provider; exit 0 all-green):
 
 ```bash
-bin/z-adversarial-review setup            # deterministic, free
-bin/z-adversarial-review setup --trust    # write the codex trust entry (idempotent)
-bin/z-adversarial-review setup --probe    # opt-in live micro-call per CLI (paid)
+bin/z-adversarial-review setup                        # deterministic, free
+bin/z-adversarial-review setup --trust                # write the codex trust entry (idempotent)
+bin/z-adversarial-review setup --probe                # opt-in live micro-call per CLI (paid)
+bin/z-adversarial-review setup --providers codex      # scope the table to a subset
+```
+
+`preference` reads or overwrites the saved skeptic-seat choice the skill's
+first-run flow makes (and every later `prepare` call falls back to when you
+don't pass `--skeptic-models` yourself):
+
+```bash
+bin/z-adversarial-review preference                        # {"exists": bool, "skepticModels": [...]}
+bin/z-adversarial-review preference --set '["codex","agy"]' # change the saved lineup
 ```
 
 You get a report: verdict (`REVIEW-APPROVE` / `REVIEW-FINDINGS` /
@@ -161,7 +177,7 @@ Before calling any change done: `bun test && bun run typecheck`.
   independent yardstick.
 - LLM calls (the review itself, the paid eval) run through locally installed
   CLIs — your Claude Code session, and for cross-provider skeptic seats the
-  `codex`/`gemini`/`agy` binaries you installed and authed. This repo never
+  `codex`/`agy` binaries you installed and authed. This repo never
   calls a hosted model API itself.
 - CLI skeptics run under their own vendor's sandbox with permission prompts
   skipped, inside a throwaway worktree of **the PR author's code** — the

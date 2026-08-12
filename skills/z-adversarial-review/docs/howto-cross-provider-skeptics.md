@@ -1,8 +1,8 @@
 # How to run skeptic seats on other vendors' CLIs
 
-Put one or more skeptic seats on OpenAI's `codex`, Google's `gemini`, or
-Antigravity's `agy` instead of Claude, so the three refutation attempts do
-not all share one model's blind spots. End result: a review whose quorum
+Put one or more skeptic seats on OpenAI's `codex` or Antigravity's `agy`
+instead of Claude, so the three refutation attempts do not all share one
+model's blind spots. End result: a review whose quorum
 mixes providers, with each CLI seat's verdict counted off disk exactly like
 a Claude seat's.
 
@@ -12,13 +12,18 @@ a Claude seat's.
   [tutorial](tutorial-first-review.md) if you have never run a review).
 - The CLI for each provider you want, installed and authenticated:
   - `codex` — `npm install -g @openai/codex`, then `codex login`
-  - `gemini` — `npm install -g @google/gemini-cli`, then run `gemini` once
-    interactively to sign in (or set `GEMINI_API_KEY`)
   - `agy` — install Google Antigravity (https://antigravity.google), then
     run `agy` once interactively to sign in
 
 You only need the providers you plan to seat. The reviewer seat itself is
 Claude-only; CLI tokens there are rejected by design.
+
+**Already been asked once?** The skill asks every new user this exact
+question the first time they run `/z-adversarial-review` (Step 0 of
+`SKILL.md`) and remembers the answer — the steps below are for setting it up
+by hand, changing a saved choice, or re-checking after installing a CLI.
+See [`preference`](reference-cli.md#preference) to read or overwrite the
+saved lineup directly.
 
 ## Steps
 
@@ -40,7 +45,7 @@ Claude-only; CLI tokens there are rejected by design.
 
    This appends `[projects."<repo-root>"] trust_level = "trusted"` to
    `~/.codex/config.toml`, idempotently, and prints exactly what it changed.
-   gemini and agy need no persisted trust — their adapters bypass per run.
+   agy needs no persisted trust — its adapter bypasses per run.
 
 3. (Optional) Prove auth end-to-end with one paid micro-call per provider:
 
@@ -49,28 +54,29 @@ Claude-only; CLI tokens there are rejected by design.
    ```
 
 4. Run the review with the lineup you want. From the skill, say it in words
-   — "review PR 123 with skeptics on codex, gemini, agy" — or pass the flag
+   — "review PR 123 with skeptics on codex and agy" — or pass the flag
    yourself:
 
    ```bash
    bin/z-adversarial-review prepare --pr-json pr.json --repo . --out-dir "$TMP" \
-     --skeptic-models '["codex","gemini","agy"]'
+     --skeptic-models '["codex","agy"]'
    ```
 
-   Token grammar: `codex[:<model>]`, `gemini[:<model>]`, `agy[:<model>]`
+   Token grammar: `codex[:<model>]`, `agy[:<model>]`
    (alias `antigravity`), or the Agent tokens
    `inherit|haiku|sonnet|opus|fable`. Fewer than three tokens gap-fill with
    `inherit` — `'["codex"]'` puts codex in seat 1 and leaves seats 2–3 on
    Claude. A `:<model>` suffix pins the provider's model
-   (e.g. `codex:o4-mini`); its charset is restricted to `[A-Za-z0-9._/-]`
-   because it is spliced into a shell command.
+   (e.g. `codex:o4-mini`, `agy:gemini-3.1-pro-high` — `agy models` lists the
+   live tokens); its charset is restricted to `[A-Za-z0-9._/-]` because it is
+   spliced into a shell command.
 
 ## Verification
 
 The manifest `prepare` prints shows the resolved lineup:
 
 ```json
-"skepticModels": ["codex", "gemini", "agy"]
+"skepticModels": ["codex", "agy", "inherit"]
 ```
 
 and the final report's Mode line repeats it. After `collect`, a healthy
@@ -84,9 +90,9 @@ contract is provider-neutral, so any process that wrote a well-addressed
 (`…/skeptic-<k>/brief.txt`) and composes one exact command per provider —
 in code, never improvised by the reviewer, which runs it foreground via its
 Bash tool with a raised timeout. The command runs from inside the throwaway
-worktree; the seat's verdict directory (and, for gemini/agy, the blinded
-input's directory — their sandboxes restrict reads, codex's only writes) is
-granted explicitly. A CLI seat that dies or times out has written no
+worktree; the seat's verdict directory (and, for agy, the blinded input's
+directory — its sandbox restricts reads, codex's only writes) is granted
+explicitly. A CLI seat that dies or times out has written no
 verdict file: that reports honestly as a short quorum, never impersonated.
 
 ## Troubleshooting
