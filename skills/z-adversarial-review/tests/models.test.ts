@@ -119,9 +119,13 @@ describe("parseReviewerSeat", () => {
 // -- CLI adapter commands -----------------------------------------------------
 
 describe("cliCommand", () => {
-  const WT = "D:\\repo\\.worktrees\\review-pr-9";
-  const DIR = "D:\\out\\runs\\r\\t9\\reviewer-1\\skeptic-1";
-  const INPUT_PATH = "D:\\out\\input-pr-9.json";
+  // Forward slashes only: node:path's dirname() is OS-native, and backslash
+  // literals only parse as separators under path.win32 -- these fixtures
+  // must resolve the same way on the Linux CI runner as on a Windows dev
+  // machine, and "/" is a valid separator under both path.win32 and path.posix.
+  const WT = "D:/repo/.worktrees/review-pr-9";
+  const DIR = "D:/out/runs/r/t9/reviewer-1/skeptic-1";
+  const INPUT_PATH = "D:/out/input-pr-9.json";
 
   test("codex: workspace-write sandbox scoped to the worktree, verdict dir granted, brief on stdin", () => {
     const c = cliCommand({ kind: "cli", provider: "codex" }, WT, DIR, INPUT_PATH);
