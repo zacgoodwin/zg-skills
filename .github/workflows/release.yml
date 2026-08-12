@@ -1,0 +1,22 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'skills/*/VERSION'
+      - 'skills/*/package.json'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: bash scripts/release-ci.sh
+        env:
+          GH_TOKEN: ${{ github.token }}

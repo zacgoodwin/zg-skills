@@ -54,9 +54,9 @@ skill_present() { # name
   [ -f ".claude/skills/$1/SKILL.md" ] || [ -f "$HOME/.claude/skills/$1/SKILL.md" ]
 }
 skill_present stack-ship \
-  && ok "stack-ship skill" || bad "stack-ship skill -> git clone https://github.com/zacgoodwin/stack-ship.git ~/.claude/skills/stack-ship"
+  && ok "stack-ship skill" || bad "stack-ship skill -> npx skills add zacgoodwin/zg-skills --skill stack-ship"
 skill_present z-adversarial-review \
-  && ok "z-adversarial-review skill" || bad "z-adversarial-review skill -> git clone https://github.com/zacgoodwin/z-adversarial-review.git ~/.claude/skills/z-adversarial-review && (cd ~/.claude/skills/z-adversarial-review && bun install)"
+  && ok "z-adversarial-review skill" || bad "z-adversarial-review skill -> npx skills add zacgoodwin/zg-skills --skill z-adversarial-review && (cd ~/.claude/skills/z-adversarial-review && bun install)"
 
 # st validate is metadata-only (local, fast); full `st doctor` does network
 # checks and belongs in troubleshooting, not the pre-commit gate.

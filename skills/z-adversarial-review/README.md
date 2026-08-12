@@ -38,11 +38,13 @@ Requires [bun](https://bun.sh), git, [jq](https://jqlang.github.io/jq/), and
 an authenticated [GitHub CLI](https://cli.github.com).
 
 ```bash
-git clone https://github.com/zacgoodwin/z-adversarial-review.git ~/.claude/skills/z-adversarial-review
+npx skills add zacgoodwin/zg-skills --skill z-adversarial-review
 ```
 
-Restart Claude Code (the skill list is scanned at session start). That's the
-whole install: the repo root is the skill.
+Restart Claude Code (the skill list is scanned at session start). Lives at
+[skills/z-adversarial-review](.) in the
+[zg-skills](https://github.com/zacgoodwin/zg-skills) monorepo, versioned and
+released independently of any other skill there.
 
 ## Use
 

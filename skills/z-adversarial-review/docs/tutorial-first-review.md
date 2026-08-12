@@ -19,7 +19,7 @@ pipeline with you as the session, which is the fastest way to understand it.
 ## The short way: the skill
 
 ```bash
-git clone https://github.com/zacgoodwin/z-adversarial-review.git ~/.claude/skills/z-adversarial-review
+npx skills add zacgoodwin/zg-skills --skill z-adversarial-review
 ```
 
 Restart Claude Code, open a session inside the repo under review, and:

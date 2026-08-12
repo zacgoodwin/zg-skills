@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      stack-ship: ${{ steps.filter.outputs.stack-ship }}
+      z-adversarial-review: ${{ steps.filter.outputs.z-adversarial-review }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            stack-ship:
+              - 'skills/stack-ship/**'
+            z-adversarial-review:
+              - 'skills/z-adversarial-review/**'
+
+  stack-ship:
+    needs: changes
+    if: needs.changes.outputs.stack-ship == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: skills/stack-ship
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash tests/gate.sh
+
+  z-adversarial-review:
+    needs: changes
+    if: needs.changes.outputs.z-adversarial-review == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: skills/z-adversarial-review
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
