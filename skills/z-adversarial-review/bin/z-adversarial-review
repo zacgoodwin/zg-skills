@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Thin CLI entry: everything lives in lib/review.ts under bun. This wrapper
+# only resolves its own location and hands off; it never shells the GitHub CLI
+# itself (tests/skill.test.ts holds it to that, and the skill file's own
+# invocations are gated against an explicit allowlist).
+set -e
+HERE="$(cd "$(dirname "$0")" && pwd -P)"
+if [ "${1:-}" = "setup" ]; then
+  exec bun "$HERE/../lib/models.ts" "$@"
+fi
+exec bun "$HERE/../lib/review.ts" "$@"

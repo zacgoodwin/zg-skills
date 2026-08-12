@@ -1,0 +1,14 @@
+{
+  "name": "z-adversarial-review",
+  "version": "1.2.0",
+  "description": "Blinded adversarial review for any GitHub PR: one fresh reviewer, three skeptics, verdicts as files, quorum counted off disk.",
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.0",
+    "typescript": "^5.7.0"
+  }
+}
