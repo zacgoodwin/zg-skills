@@ -321,12 +321,18 @@ export function prepare(
     );
   }
 
+  // One-shot run identity, minted before the worktree so its path can carry
+  // the runId: two concurrent reviews of the same PR (or a crashed run's
+  // leftover) must never share a worktree directory, or one's cleanup would
+  // delete the other's still-running checkout.
+  const runId = mintRunId(Date.now());
+
   // Throwaway worktree of the head commit, under the repo's own .worktrees/
   // (never a system temp dir: reviewers run real test suites in here, and some
-  // suites reach through homedir()/tmp during cleanup). Self-healing: a
-  // leftover from an earlier run of the same PR is removed and re-added, so a
-  // crashed review never wedges the next one.
-  const worktreePath = join(repo, ".worktrees", `review-pr-${pr.number}`);
+  // suites reach through homedir()/tmp during cleanup). The runId makes the
+  // path unique per run; the existsSync guard below is now just a defensive
+  // no-op against a runId collision, not a cross-run self-heal.
+  const worktreePath = join(repo, ".worktrees", `review-pr-${pr.number}-${runId}`);
   git(repo, ["worktree", "prune"], true);
   if (existsSync(worktreePath)) {
     git(repo, ["worktree", "remove", "--force", worktreePath], true);
@@ -353,11 +359,10 @@ export function prepare(
   const diffPath = join(outDir, `diff-pr-${pr.number}.patch`);
   writeFileSync(diffPath, diff);
 
-  // Run identity + artifact tree (run-id.ts stageDest), rooted at out-dir: the
-  // reviewer's verdict.json lands in its stage dir, each skeptic's in a
-  // skeptic-<k>/ under it -- which is what lets quorumFromDisk's path-trust
-  // rule apply unchanged.
-  const runId = mintRunId(Date.now());
+  // Artifact tree (run-id.ts stageDest), rooted at out-dir: the reviewer's
+  // verdict.json lands in its stage dir, each skeptic's in a skeptic-<k>/
+  // under it -- which is what lets quorumFromDisk's path-trust rule apply
+  // unchanged.
   const runRoot = join(outDir, "runs", runId);
   const reviewerDir = stageDest(outDir, runId, pr.number, "reviewer", STANDALONE_ATTEMPT);
   const skepticDirs = [1, 2, 3].map((k) => join(reviewerDir, `skeptic-${k}`));
@@ -441,7 +446,8 @@ export function collect(
   verdictFile: string,
   runRoot: string,
   runId: string,
-  ticket: number
+  ticket: number,
+  adversarial: boolean
 ): CollectResult {
   const expect: ExpectedSpawn = {
     runId,
@@ -453,14 +459,20 @@ export function collect(
   if (!check.ok) return { ok: false, reason: check.reason };
   const v = check.verdict;
   const conf = (v.evidence as { confidence?: unknown } | undefined)?.confidence;
-  const listed = (v.evidence as { skepticVerdictPaths?: unknown } | undefined)?.skepticVerdictPaths;
-  const paths = Array.isArray(listed) ? listed.filter((p): p is string => typeof p === "string") : [];
+  // Skeptic paths are DERIVED from the layout prepare() itself created (the
+  // same stageDest/skeptic-<k> shape prepare wrote to disk), never taken from
+  // the reviewer's own evidence.skepticVerdictPaths: a reviewer that omits or
+  // under-lists that field must not be able to spoof the quorum by hiding
+  // skeptic verdicts that actually landed. --adversarial (the manifest's own
+  // field) is what the caller passes; it is never inferred from the verdict.
+  const reviewerDir = join(runRoot, `t${ticket}`, `reviewer-${STANDALONE_ATTEMPT}`);
+  const skepticPaths = [1, 2, 3].map((k) => verdictPath(join(reviewerDir, `skeptic-${k}`)));
   return {
     ok: true,
     result: v.result,
     notes: v.notes ?? "",
     confidence: typeof conf === "number" && conf >= 0 && conf <= 100 ? conf : null,
-    quorum: Array.isArray(listed) ? quorumFromDisk(paths, runRoot, expect) : null,
+    quorum: adversarial ? quorumFromDisk(skepticPaths, runRoot, expect) : null,
   };
 }
 
@@ -503,10 +515,15 @@ const USAGE = `review <command> [args]
       choice from lib/models.ts preference, if one exists.
 
   collect --verdict <verdict.json> --run-root <dir> --run <runId> --ticket <n>
+          --adversarial <true|false>
       Validate the reviewer's verdict file against the spawn prepare minted
-      (all four values are in prepare's manifest), count the skeptic quorum
-      off disk, and print JSON: {ok, result, notes, confidence, quorum} or
-      {ok:false, reason}. Exit 0 both ways -- INVALID is an answer.
+      (all four values are in prepare's manifest), then -- when --adversarial
+      is true -- count the skeptic quorum off the canonical skeptic-<1,2,3>
+      verdict files prepare itself laid out under --run-root (never off the
+      reviewer's self-reported evidence.skepticVerdictPaths). Prints JSON:
+      {ok, result, notes, confidence, quorum} or {ok:false, reason}. Exit 0
+      both ways -- INVALID is an answer. --adversarial is the manifest's own
+      "adversarial" field, passed verbatim.
 
   cleanup --repo <dir> --worktree <path>
       Remove the throwaway worktree. Idempotent; prints "removed" or "absent".`;
@@ -529,13 +546,20 @@ export function main(argv: string[]): number {
       if (!Number.isInteger(ticket) || ticket <= 0) {
         throw new ZError(`--ticket must be a positive integer, got ${JSON.stringify(ticketRaw)}.`);
       }
+      const adversarialRaw = requireFlag(flags, "adversarial");
+      if (adversarialRaw !== "true" && adversarialRaw !== "false") {
+        throw new ZError(
+          `--adversarial must be "true" or "false" (the manifest's own field), got ${JSON.stringify(adversarialRaw)}.`
+        );
+      }
       console.log(
         JSON.stringify(
           collect(
             requireFlag(flags, "verdict"),
             requireFlag(flags, "run-root"),
             requireFlag(flags, "run"),
-            ticket
+            ticket,
+            adversarialRaw === "true"
           ),
           null,
           2

@@ -105,13 +105,17 @@ path is in its prompt. The enforcement is downstream and deterministic:
   `<placeholder>`: all named with a reason, never reinterpreted or partially
   trusted. `collect` exits 0 with `{ok: false, reason}` — an invalid verdict
   is an *answer* the session relays, not an exception to retry around.
-- **The quorum is counted off disk.** The reviewer lists the skeptic verdict
-  paths it saw, but the count the report shows comes from reading those
-  files at collect time (`quorumFromDisk`). A listed path must resolve
-  inside this run's own `runs/<runId>/t<ticket>/` subtree — an outside path
-  (another run, an invented `/tmp` file, a traversal) is invalid, and
-  listing it was the lie. The reviewer writing "3/3 agreed" has no effect on
-  anything.
+- **The quorum is counted off disk, from paths `collect` derives itself.**
+  `prepare` lays out exactly three skeptic directories
+  (`skeptic-1`..`skeptic-3`) under the reviewer's own stage dir; `collect`
+  reconstructs those same three paths from `--run-root`/`--ticket` and reads
+  them (`quorumFromDisk`) — it never trusts the reviewer's own
+  `evidence.skepticVerdictPaths` to decide what to check. Early versions did
+  trust that list, which meant a reviewer could omit or under-list it to
+  make a disagreeing (or simply unread) skeptic verdict vanish from the
+  count; deriving the paths closes that. A derived path must still resolve
+  inside this run's own `runs/<runId>/t<ticket>/` subtree as a defensive
+  check. The reviewer writing "3/3 agreed" has no effect on anything.
 
 ## The foreground rule
 

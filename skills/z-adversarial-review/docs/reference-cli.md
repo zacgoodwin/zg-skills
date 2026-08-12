@@ -98,10 +98,13 @@ as a finding (`acFound: false` in the manifest).
 
 ### The worktree
 
-A detached checkout of the PR head at `<repo>/.worktrees/review-pr-<N>` —
-under the repo, never a system temp dir (reviewers run real test suites in
-it). Self-healing: a leftover worktree from an earlier run of the same PR is
-force-removed and re-added, so a crashed review never wedges the next one.
+A detached checkout of the PR head at
+`<repo>/.worktrees/review-pr-<N>-<runId>` — under the repo, never a system
+temp dir (reviewers run real test suites in it). The runId in the path is
+what keeps two concurrent reviews of the same PR from ever sharing a
+worktree: each `prepare` call gets its own directory, and `cleanup` is always
+handed that exact path back, so one run's cleanup can never remove another
+run's still-active checkout.
 
 ### Manifest fields
 
@@ -132,13 +135,14 @@ compile-time type identity and a runtime key check
 
 ```bash
 bin/z-adversarial-review collect --verdict <verdict.json> --run-root <dir> \
-  --run <runId> --ticket <n>
+  --run <runId> --ticket <n> --adversarial <true|false>
 ```
 
 Validates the reviewer's verdict file against the exact spawn `prepare`
-minted (all four values come from the manifest: `verdictPath`, `runRoot`,
-`runId`, `pr`) and counts the skeptic quorum off disk. Prints JSON and
-exits 0 **both ways** — INVALID is an answer, not an error:
+minted (all five values come from the manifest: `verdictPath`, `runRoot`,
+`runId`, `pr`, `adversarial`) and, when `--adversarial` is `true`, counts the
+skeptic quorum off disk. Prints JSON and exits 0 **both ways** — INVALID is
+an answer, not an error:
 
 ```json
 { "ok": true, "result": "REVIEW-FINDINGS", "notes": "…", "confidence": 67,
@@ -152,15 +156,20 @@ or `{ "ok": false, "reason": "…" }`.
 | `result` | One of `REVIEW-APPROVE`, `REVIEW-FINDINGS`, `NEEDS-HUMAN`, `BLOCKED`, `CONFUSED`. |
 | `notes` | The reviewer's human-facing line: findings list, question, or reason. `""` when absent. |
 | `confidence` | 0–100 from the verdict's evidence, or `null` when absent or out of range. On adversarial runs the reviewer reads it off a fixed lookup table over the skeptic verdicts it held (3 UPHELD of 3 → 100, 2 → 67, 1 → 33, 0 → 0; short lineups have their own rows) — never model arithmetic. |
-| `quorum` | Counted off the skeptic verdict files on disk; `null` on a single pass (the reviewer listed no skeptic paths). `received` = valid files found, `of` = 3, `unrefuted` = valid verdicts whose result is `UPHELD`, `invalid` = one reason per listed-but-unusable path. |
+| `quorum` | Counted off the three canonical `skeptic-<1,2,3>/verdict.json` files `prepare` itself laid out under `--run-root`; `null` when `--adversarial` is `false`. `received` = valid files found, `of` = 3, `unrefuted` = valid verdicts whose result is `UPHELD`, `invalid` = one reason per unusable canonical path (e.g. missing). |
 
-Quorum path-trust rule: a listed skeptic verdict path must resolve inside
-`<runRoot>/t<ticket>/` after normalization. Outside paths (another run's
-directory, an invented `/tmp` file, a traversal) and duplicates land in
-`invalid` with the reason. The directory is read at collect time, so a
-skeptic verdict that landed after the reviewer returned still counts.
+`collect` derives those three skeptic paths itself from `--run-root` and
+`--ticket` — it never reads the reviewer's own
+`evidence.skepticVerdictPaths` to decide what to count, so a reviewer that
+omits or under-lists that field cannot hide a skeptic verdict that actually
+landed on disk. Quorum path-trust rule (still enforced defensively): a
+derived path must resolve inside `<runRoot>/t<ticket>/` after normalization.
+The directory is read at collect time, so a skeptic verdict that landed
+after the reviewer returned still counts.
 
-`--ticket` must be a positive integer (the PR number).
+`--ticket` must be a positive integer (the PR number). `--adversarial` must
+be exactly `true` or `false` — pass the manifest's own `adversarial` field
+verbatim, never inferred from the verdict.
 
 ## `cleanup`
 
@@ -278,6 +287,8 @@ Result unions per stage (`STAGE_RESULTS`):
 
 Evidence shape per stage (validated shallowly, consumed deterministically):
 reviewer `{confidence, skepticVerdictPaths}`, skeptic `{lens, claimChecked}`.
+`skepticVerdictPaths` is informational only — `collect` derives the quorum's
+file paths itself (see `collect` above) and never trusts this list.
 
 A verdict is INVALID — named with a reason, never reinterpreted — when it
 is: unreadable, not valid JSON, not an object, the wrong `schema` version,

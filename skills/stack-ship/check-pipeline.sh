@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Gate test: quality-pipeline wiring for /stack-ship (stax + roborev +
 # z-adversarial-review). Deterministic, <2s. Only network-ish call is roborev
-# against the local daemon. Run from the repo you intend to ship:
-#   bash ~/.claude/skills/stack-ship/check-pipeline.sh
+# against the local daemon. Run from the repo you intend to ship, resolving
+# the repo-local install first and $HOME as fallback:
+#   PACK=".claude/skills/stack-ship"; [ -d "$PACK" ] || PACK="$HOME/.claude/skills/stack-ship"
+#   bash "$PACK/check-pipeline.sh"
 # Project-policy checks (e.g. pinning .roborev.toml agent/model) belong in the
 # project's own gate, not here.
 set -u

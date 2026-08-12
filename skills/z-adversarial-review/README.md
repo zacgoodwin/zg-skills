@@ -127,7 +127,7 @@ There is also a plain CLI for the deterministic core:
 
 ```bash
 bin/z-adversarial-review prepare --pr-json pr.json --repo . --out-dir /tmp/rev
-bin/z-adversarial-review collect --verdict <path> --run-root <dir> --run <id> --ticket <n>
+bin/z-adversarial-review collect --verdict <path> --run-root <dir> --run <id> --ticket <n> --adversarial <true|false>
 bin/z-adversarial-review cleanup --repo . --worktree <path>
 ```
 

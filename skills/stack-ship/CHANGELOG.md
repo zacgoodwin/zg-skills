@@ -6,6 +6,17 @@ versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-08-12
+
+### Fixed
+
+- `check-pipeline.sh`'s documented invocation resolved only
+  `$HOME/.claude/skills/stack-ship/check-pipeline.sh`, so a repo that
+  vendors its own copy of the skill (and has no global install under
+  `$HOME`) couldn't run it. SKILL.md and README.md now resolve the
+  repo-local install first, falling back to `$HOME` only when no
+  repo-local copy exists.
+
 ## [1.0.0] - 2026-08-12
 
 Initial release as part of the `zg-skills` monorepo. Carries forward the

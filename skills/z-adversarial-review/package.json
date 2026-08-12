@@ -1,6 +1,6 @@
 {
   "name": "z-adversarial-review",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Blinded adversarial review for any GitHub PR: one fresh reviewer, three skeptics, verdicts as files, quorum counted off disk.",
   "type": "module",
   "scripts": {

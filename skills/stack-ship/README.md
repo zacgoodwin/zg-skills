@@ -33,10 +33,13 @@ released independently of any other skill there.
 `st` (stax), `roborev` (with its post-commit hook: `roborev init`), `jq`,
 `gh` + the `gh-stack` extension, `git`, and the z-adversarial-review skill
 (whose runtime needs `bun`). Verify the wiring of the repo you intend to
-ship from:
+ship from — repo-local install first, `$HOME` fallback for a global-only
+install:
 
 ```bash
-bash ~/.claude/skills/stack-ship/check-pipeline.sh
+PACK=".claude/skills/stack-ship"
+[ -d "$PACK" ] || PACK="$HOME/.claude/skills/stack-ship"
+bash "$PACK/check-pipeline.sh"
 ```
 
 ## Files

@@ -6,6 +6,28 @@ versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-08-12
+
+### Fixed
+
+- `collect` no longer trusts the reviewer's self-reported
+  `evidence.skepticVerdictPaths` to decide which skeptic verdicts to count.
+  It now derives the three canonical `skeptic-<1,2,3>/verdict.json` paths
+  itself from `--run-root`/`--ticket` (the same layout `prepare` wrote), so
+  a reviewer that omits or under-lists that field can no longer make a
+  disagreeing or unread skeptic verdict disappear from the quorum. `collect`
+  now requires `--adversarial <true|false>` (the manifest's own field) to
+  gate whether a quorum is counted at all.
+- Two concurrent reviews of the same PR (or a crashed run's leftover) no
+  longer share a worktree path. `prepare` now mints the run identity before
+  creating the worktree and names it `review-pr-<N>-<runId>`, so one run's
+  `cleanup` can never remove another run's still-active checkout.
+- SKILL.md and docs now resolve the skill's own directory repo-local first
+  (`.claude/skills/z-adversarial-review`), falling back to
+  `$HOME/.claude/skills/z-adversarial-review` only when no repo-local copy
+  exists — a vendored, version-pinned copy in a project repo no longer gets
+  silently shadowed by whatever happens to be installed globally.
+
 ## [1.4.0] - 2026-08-12
 
 ### Added

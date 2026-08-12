@@ -19,8 +19,9 @@ review was skipped and why).
 
 Assumes: `st` (stax) initialized in the repo, roborev hook installed
 (`roborev init`), z-adversarial-review skill installed. `check-pipeline.sh`,
-shipped alongside this skill, verifies all of it:
-`bash ~/.claude/skills/stack-ship/check-pipeline.sh`.
+shipped alongside this skill, verifies all of it. Resolve the repo-local
+install first, `$HOME` as fallback for a global-only install:
+`PACK=".claude/skills/stack-ship"; [ -d "$PACK" ] || PACK="$HOME/.claude/skills/stack-ship"; bash "$PACK/check-pipeline.sh"`.
 
 ## 1. Preflight — every check must pass or stop with BLOCKED
 

@@ -45,8 +45,8 @@ lineup. It is a one-time, per-user choice — saved under
 Once saved, every future review reuses it silently and this step is a no-op.
 
 ```bash
-PACK="$HOME/.claude/skills/z-adversarial-review"
-[ -d "$PACK" ] || PACK="$(cd "$(dirname "${BASH_SOURCE:-$0}")" && pwd -P)"
+PACK=".claude/skills/z-adversarial-review"
+[ -d "$PACK" ] || PACK="$HOME/.claude/skills/z-adversarial-review"
 bun "$PACK/lib/models.ts" preference
 ```
 
@@ -109,8 +109,8 @@ already runs this validation once for a new user; `/z-adversarial-review
 setup` (below) re-runs it any time, e.g. after installing a CLI.
 
 ```bash
-PACK="$HOME/.claude/skills/z-adversarial-review"
-[ -d "$PACK" ] || PACK="$(cd "$(dirname "${BASH_SOURCE:-$0}")" && pwd -P)"
+PACK=".claude/skills/z-adversarial-review"
+[ -d "$PACK" ] || PACK="$HOME/.claude/skills/z-adversarial-review"
 TMP=$(mktemp -d)
 
 # PR metadata (read-only)
@@ -130,8 +130,9 @@ cat "$TMP/manifest.json"
 `prepare` fetches the PR head if it is not local, writes the merge-base diff
 with lockfiles excluded (falling back to unfiltered when the PR is
 lockfile-only), creates a throwaway worktree of the head commit under the
-repo's own `.worktrees/review-pr-<N>` (self-healing if a previous run left one
-behind), writes the blinded `input-pr-<N>.json` — EXACTLY the four keys
+repo's own `.worktrees/review-pr-<N>-<runId>` (the runId keeps two
+concurrent reviews of the same PR from ever sharing one), writes the blinded
+`input-pr-<N>.json` — EXACTLY the four keys
 `{ticketBody, acceptanceCriteria, diff, worktreePath}`, enforced by a
 compile-time + runtime gate — mints a one-shot run identity for the verdict
 envelope, and builds the reviewer prompt (skeptic briefs included, composed in
@@ -179,20 +180,25 @@ minutes of wall clock; that is the review running, not a hang.
 ## Step 3 — Collect the verdict (deterministic)
 
 Never read the verdict files yourself and never trust the agent's prose —
-validate and count in code, with the manifest's own envelope values:
+validate and count in code, with the manifest's own envelope values.
+`--adversarial` is the manifest's `adversarial` field, passed verbatim —
+`collect` never infers it from the verdict, and never trusts the reviewer's
+own `evidence.skepticVerdictPaths` to decide what to count:
 
 ```bash
 bun "$PACK/lib/review.ts" collect --verdict "$VERDICT_PATH" \
-  --run-root "$RUN_ROOT" --run "$RUN_ID" --ticket "$PR_NUM"
+  --run-root "$RUN_ROOT" --run "$RUN_ID" --ticket "$PR_NUM" \
+  --adversarial "$ADVERSARIAL"
 ```
 
 Prints `{ok, result, notes, confidence, quorum}`. `result` is one of
 `REVIEW-APPROVE`, `REVIEW-FINDINGS`, `NEEDS-HUMAN`, `BLOCKED`, `CONFUSED`.
-`quorum` is `{received, of, unrefuted, invalid}` counted off the skeptic
-verdict files on disk (`null` on a single pass). An `{ok: false, reason}` —
-missing file, mis-addressed envelope, pasted placeholder — means the review
-FAILED: relay the reason, clean up, and offer to re-run; never reconstruct a
-verdict from the transcript.
+`quorum` is `{received, of, unrefuted, invalid}` counted off the canonical
+skeptic verdict files `prepare` itself laid out on disk (`null` when
+`--adversarial` is `false`). An `{ok: false, reason}` — missing file,
+mis-addressed envelope, pasted placeholder — means the review FAILED: relay
+the reason, clean up, and offer to re-run; never reconstruct a verdict from
+the transcript.
 
 ## Step 4 — Report, then clean up
 
@@ -240,8 +246,8 @@ BEFORE a review depends on it — binary on PATH + version, auth, folder
 trust. Deterministic, free, one row per provider; exit 0 all-green else 1:
 
 ```bash
-PACK="$HOME/.claude/skills/z-adversarial-review"
-[ -d "$PACK" ] || PACK="$(cd "$(dirname "${BASH_SOURCE:-$0}")" && pwd -P)"
+PACK=".claude/skills/z-adversarial-review"
+[ -d "$PACK" ] || PACK="$HOME/.claude/skills/z-adversarial-review"
 bun "$PACK/lib/models.ts" setup --repo .
 ```
 

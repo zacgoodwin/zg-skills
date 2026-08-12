@@ -40,7 +40,8 @@ From inside the repo under review (substitute your PR number for `123`, and
 your clone path if it differs):
 
 ```bash
-PACK="$HOME/.claude/skills/z-adversarial-review"
+PACK=".claude/skills/z-adversarial-review"
+[ -d "$PACK" ] || PACK="$HOME/.claude/skills/z-adversarial-review"
 TMP=$(mktemp -d)
 gh pr view 123 --json number,title,url,body,headRefOid,baseRefOid,baseRefName,labels,closingIssuesReferences > "$TMP/pr.json"
 SPEC_ISSUE=$(jq -r '.closingIssuesReferences[0].number // empty' "$TMP/pr.json")
@@ -73,8 +74,10 @@ worth reading right now:
 
 Also on disk now: the four-key blinded input (`input-pr-123.json` — exactly
 `ticketBody`, `acceptanceCriteria`, `diff`, `worktreePath`), the diff, a
-throwaway worktree of the PR head under `.worktrees/review-pr-123`, and an
-empty artifact tree under `$TMP/runs/<runId>/` waiting for verdict files.
+throwaway worktree of the PR head under `.worktrees/review-pr-123-<runId>`
+(the runId keeps two overlapping reviews of the same PR from ever sharing a
+worktree), and an empty artifact tree under `$TMP/runs/<runId>/` waiting for
+verdict files.
 
 ## Step 3: Run the reviewer
 
@@ -103,8 +106,13 @@ Never trust the prose — validate the file against the exact run identity
   --verdict "$(jq -r .verdictPath "$TMP/manifest.json")" \
   --run-root "$(jq -r .runRoot "$TMP/manifest.json")" \
   --run "$(jq -r .runId "$TMP/manifest.json")" \
-  --ticket "$(jq -r .pr "$TMP/manifest.json")"
+  --ticket "$(jq -r .pr "$TMP/manifest.json")" \
+  --adversarial "$(jq -r .adversarial "$TMP/manifest.json")"
 ```
+
+`--adversarial` is the manifest's own `adversarial` field, passed straight
+through — `collect` gates the quorum count on it, never on anything the
+reviewer's verdict claims.
 
 A healthy adversarial run prints something like:
 

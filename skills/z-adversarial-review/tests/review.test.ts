@@ -178,8 +178,9 @@ describe("prepare", () => {
     expect(input.diff).toContain("util.ts");
     expect(input.diff).not.toContain("yarn.lock");
 
-    // Throwaway worktree: exists, detached at the PR head, under repo/.worktrees.
-    expect(m.worktreePath).toBe(join(repo, ".worktrees", "review-pr-101"));
+    // Throwaway worktree: exists, detached at the PR head, under repo/.worktrees,
+    // its name carrying this run's own runId (never shared across runs).
+    expect(m.worktreePath).toBe(join(repo, ".worktrees", `review-pr-101-${m.runId}`));
     expect(git(m.worktreePath, "rev-parse", "HEAD")).toBe(bigHeadSha);
 
     // 12 changed lines >= threshold under the default non-trivial mode.
@@ -210,9 +211,27 @@ describe("prepare", () => {
     }
   });
 
-  test("re-running prepare for the same PR self-heals the leftover worktree", () => {
+  test("re-running prepare for the same PR mints a fresh worktree", () => {
     const m = runPrepare(101);
     expect(git(m.worktreePath, "rev-parse", "HEAD")).toBe(bigHeadSha);
+  });
+
+  test("two concurrent prepares of the same PR never share a worktree path (issue #99)", () => {
+    // Two overlapping reviews of PR 101 (e.g. two sessions racing the same
+    // PR): each prepare() must get its own worktree, both must exist
+    // simultaneously, and cleaning up one must never touch the other's.
+    const a = runPrepare(101);
+    const b = runPrepare(101);
+    expect(a.worktreePath).not.toBe(b.worktreePath);
+    expect(existsSync(a.worktreePath)).toBe(true);
+    expect(existsSync(b.worktreePath)).toBe(true);
+    expect(git(a.worktreePath, "rev-parse", "HEAD")).toBe(bigHeadSha);
+    expect(git(b.worktreePath, "rev-parse", "HEAD")).toBe(bigHeadSha);
+
+    cleanup(repo, a.worktreePath);
+    expect(existsSync(a.worktreePath)).toBe(false);
+    expect(existsSync(b.worktreePath)).toBe(true); // b survives a's cleanup
+    cleanup(repo, b.worktreePath);
   });
 
   test("linked issue: its body is the spec verbatim, its AC slice is extracted, labels union in", () => {
@@ -463,6 +482,7 @@ describe("collect", () => {
 
   test("adversarial approve: quorum counted off the skeptic files, not the reviewer's word", () => {
     const m = runPrepare(120);
+    expect(m.adversarial).toBe(true);
     const reviewerDir = dirname(m.verdictPath);
     const s1 = join(reviewerDir, "skeptic-1", "verdict.json");
     const s2 = join(reviewerDir, "skeptic-2", "verdict.json");
@@ -474,7 +494,7 @@ describe("collect", () => {
       skepticVerdictPaths: [s1, s2, missing], // reviewer lists a file that never landed
     });
 
-    const r = collect(m.verdictPath, m.runRoot, m.runId, 120);
+    const r = collect(m.verdictPath, m.runRoot, m.runId, 120, m.adversarial);
     if (!r.ok) throw new Error(r.reason);
     expect(r.result).toBe("REVIEW-APPROVE");
     expect(r.confidence).toBe(33);
@@ -483,10 +503,48 @@ describe("collect", () => {
     cleanup(repo, m.worktreePath);
   });
 
-  test("single pass: no skeptic list means no quorum, confidence still read", () => {
+  // Issue #98: collect() must never trust the reviewer's own
+  // evidence.skepticVerdictPaths to decide which files to count -- a reviewer
+  // that omits the field (or lists fewer than what actually landed) must not
+  // be able to spoof "single pass, no quorum to check" past an adversarial
+  // run whose skeptics disagreed.
+  test("a reviewer that hides skepticVerdictPaths cannot spoof the quorum (issue #98)", () => {
+    const m = runPrepare(124);
+    expect(m.adversarial).toBe(true);
+    const reviewerDir = dirname(m.verdictPath);
+    writeVerdict(join(reviewerDir, "skeptic-1", "verdict.json"), m, 124, "skeptic", "UPHELD", {
+      lens: "refutation",
+      claimChecked: "x",
+    });
+    writeVerdict(join(reviewerDir, "skeptic-2", "verdict.json"), m, 124, "skeptic", "UPHELD", {
+      lens: "refutation",
+      claimChecked: "y",
+    });
+    writeVerdict(join(reviewerDir, "skeptic-3", "verdict.json"), m, 124, "skeptic", "REFUTED", {
+      lens: "refutation",
+      claimChecked: "z",
+    });
+    // The reviewer's own verdict omits skepticVerdictPaths entirely -- the
+    // pre-fix code read that as "single pass" and reported quorum: null even
+    // though all three skeptics actually ran and one refuted the diff.
+    writeVerdict(m.verdictPath, m, 124, "reviewer", "REVIEW-APPROVE", { confidence: 90 });
+
+    const r = collect(m.verdictPath, m.runRoot, m.runId, 124, m.adversarial);
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.quorum).toMatchObject({ received: 3, of: 3, unrefuted: 2, invalid: [] });
+    cleanup(repo, m.worktreePath);
+  });
+
+  test("single pass (adversarial: false): quorum is null regardless of any evidence", () => {
     const m = runPrepare(121, { headRefOid: smallHeadSha });
-    writeVerdict(m.verdictPath, m, 121, "reviewer", "REVIEW-FINDINGS", { confidence: 80 });
-    const r = collect(m.verdictPath, m.runRoot, m.runId, 121);
+    expect(m.adversarial).toBe(false);
+    // Even a (malformed/lying) evidence.skepticVerdictPaths must not matter:
+    // adversarial:false is what gates quorum, never the reviewer's evidence.
+    writeVerdict(m.verdictPath, m, 121, "reviewer", "REVIEW-FINDINGS", {
+      confidence: 80,
+      skepticVerdictPaths: ["/tmp/invented.json"],
+    });
+    const r = collect(m.verdictPath, m.runRoot, m.runId, 121, m.adversarial);
     if (!r.ok) throw new Error(r.reason);
     expect(r.result).toBe("REVIEW-FINDINGS");
     expect(r.confidence).toBe(80);
@@ -496,7 +554,7 @@ describe("collect", () => {
 
   test("a missing verdict file is INVALID with the reason, not a throw", () => {
     const m = runPrepare(122, { headRefOid: smallHeadSha });
-    const r = collect(m.verdictPath, m.runRoot, m.runId, 122);
+    const r = collect(m.verdictPath, m.runRoot, m.runId, 122, m.adversarial);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain("no verdict file");
     cleanup(repo, m.worktreePath);
@@ -507,7 +565,7 @@ describe("collect", () => {
     writeVerdict(m.verdictPath, { runId: "run-20200101-000000-abcd" }, 123, "reviewer", "REVIEW-APPROVE", {
       confidence: 100,
     });
-    const r = collect(m.verdictPath, m.runRoot, m.runId, 123);
+    const r = collect(m.verdictPath, m.runRoot, m.runId, 123, m.adversarial);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain("runId");
     cleanup(repo, m.worktreePath);
