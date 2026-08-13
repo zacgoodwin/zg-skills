@@ -29,10 +29,11 @@ else
     if printf '%s' "$2" | jq -e "$prog" >/dev/null 2>&1; then got=pass; else got=fail; fi
     [ "$got" = "$1" ] && ok "gate $1: $3" || bad "gate expected $1 got $got: $3"
   }
-  expect pass 'null'                                       "null (branch has no jobs)"
-  expect pass '[]'                                         "empty array"
+  expect fail 'null'                                       "null ledger response (no evidence)"
+  expect fail '[]'                                         "empty array (no evidence)"
   expect pass '[{"status":"done","verdict":"P"}]'          "all pass"
-  expect pass '[{"status":"queued","verdict":null},{"status":"running","verdict":null},{"status":"canceled","verdict":null}]' "in-flight jobs excluded"
+  expect pass '[{"status":"done","verdict":"P"},{"status":"queued","verdict":null},{"status":"running","verdict":null},{"status":"canceled","verdict":null}]' "in-flight jobs excluded (with a real P)"
+  expect fail '[{"status":"queued","verdict":null},{"status":"running","verdict":null},{"status":"canceled","verdict":null}]' "only in-flight jobs, no completed P evidence"
   expect fail '[{"status":"done","verdict":"F"}]'          "F verdict"
   expect fail '[{"status":"done","verdict":"P"},{"status":"done","verdict":"F"}]' "one F among passes"
   expect fail '[{"status":"failed","verdict":null}]'       "crashed review job"

@@ -50,24 +50,29 @@ open count:
 
 ```bash
 # Fail-closed: exits non-zero on any F verdict among completed jobs, any
-# crashed (failed) review job, a non-array response, or a done-job verdict
-# outside P/F (schema drift must break the gate, not pass it). A failed job
-# means a commit went unreviewed — re-run it (roborev review <sha>) or close
-# it deliberately before submitting; a branch of all-crashed reviews must
-# not submit as if it were green. Queued/running/canceled jobs carry
-# verdict:null and are excluded — preflight already drained the queue, and
-# this very gate's --branch review enqueues jobs the moment it runs.
-# --branch pins the scope explicitly rather than trusting the CLI's
-# current-branch default.
+# crashed (failed) review job, a non-array response, a null/empty response,
+# a branch with zero completed P verdicts, or a done-job verdict outside P/F
+# (schema drift must break the gate, not pass it). `null` (API error) and
+# `[]` (nothing to show evidence for) must NOT normalize into a vacuous
+# pass — the --branch review that just ran above always enqueues at least
+# one job for the branch's commits, so a real response has ≥1 done job by
+# the time we get here; anything else means the query itself is broken, not
+# that the branch is clean. A failed job means a commit went unreviewed —
+# re-run it (roborev review <sha>) or close it deliberately before
+# submitting; a branch of all-crashed reviews must not submit as if it were
+# green. Queued/running/canceled jobs carry verdict:null and are excluded —
+# preflight already drained the queue, and this very gate's --branch review
+# enqueues jobs the moment it runs. --branch pins the scope explicitly
+# rather than trusting the CLI's current-branch default.
 roborev list --json --open --branch "$(git branch --show-current)" | jq -e '
-  (. // [])
-  | type=="array"
+  type=="array"
   and all(.[]; .status=="queued" or .status=="running" or .status=="done"
                or .status=="failed" or .status=="canceled")
   and all(.[] | select(.status=="done"); .verdict=="P" or .verdict=="F")
   and all(.[] | select(.status!="done"); .verdict==null)
   and ([.[] | select(.status=="done" and .verdict=="F")] | length == 0)
-  and ([.[] | select(.status=="failed")] | length == 0)' >/dev/null
+  and ([.[] | select(.status=="failed")] | length == 0)
+  and ([.[] | select(.status=="done" and .verdict=="P")] | length >= 1)' >/dev/null
 ```
 
 A failing review whose findings a later commit already addressed (confirmed

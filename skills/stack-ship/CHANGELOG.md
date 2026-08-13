@@ -6,6 +6,17 @@ versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-08-12
+
+### Fixed
+
+- Gate jq normalized a null `roborev list` response (API error) to `[]` via
+  `(. // [])`, then passed the fail-closed check vacuously since an empty
+  array satisfies every `all(...)` clause — submitting with zero completed
+  review evidence. The gate now rejects non-array/null responses outright
+  and requires at least one `done`+`P` verdict before it passes.
+  ([Chapterhouse#96](https://github.com/zacgoodwin/Chapterhouse/issues/96))
+
 ## [1.0.1] - 2026-08-12
 
 ### Fixed
