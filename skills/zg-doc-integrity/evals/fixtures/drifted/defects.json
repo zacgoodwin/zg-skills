@@ -1,0 +1,119 @@
+{
+  "note": "Ground truth for the drifted fixture. `seeded` are real defects a review should find; `traps` are things that LOOK like defects and must not be reported. Recall is measured against seeded, false-positive rate against traps.",
+  "matching": "Each seeded defect lists its `sides`. A side is a list of interchangeable distinctive phrases, any one of which identifies that side. A defect counts as found when a single finding's quotes hit at least two different sides (or the only side, for a one-sided defect). Phrases are deliberately SHORT and central: a reviewer legitimately chooses how much of a sentence to quote, and ground truth must not penalise a correct finding for quoting a different span. Every phrase must still appear verbatim in the fixture, which tests/fixture.test.ts enforces.",
+  "seeded": [
+    {
+      "id": "timeout",
+      "kind": "numeric-conflict",
+      "summary": "Request timeout is 30s in the guide and 60s in the reference, including inside a config sample.",
+      "sides": [["The request timeout is 30s"], ["The request timeout is 60s", "request timeout: 60s"]],
+      "crossDocument": true,
+      "reachableBy": ["numeric-cluster", "shard", "reduce"]
+    },
+    {
+      "id": "api-key-meaning",
+      "kind": "term-collision",
+      "summary": "\"API key\" is defined as a long-lived hand-rotated credential in the guide and a one-hour bearer token in the reference.",
+      "sides": [["An API key is a long-lived credential"], ["An API key is a short-lived bearer token"]],
+      "crossDocument": true,
+      "reachableBy": ["term-cluster", "shard", "reduce"]
+    },
+    {
+      "id": "retry-budget-meaning",
+      "kind": "term-collision",
+      "summary": "\"Retry budget\" means a count of attempts in the guide and a wall-clock duration in the reference.",
+      "sides": [
+        ["number of attempts", "The default retry budget is 3."],
+        ["total wall-clock time", "The default retry budget is 30s."]
+      ],
+      "crossDocument": true,
+      "reachableBy": ["term-cluster", "shard", "reduce"]
+    },
+    {
+      "id": "migrations-order",
+      "kind": "contradiction",
+      "summary": "The guide requires migrations before deploy; the reference forbids it and requires them after.",
+      "sides": [
+        ["You must run migrations before deploying."],
+        ["Migrations must never run before a deploy", "Run them after the new version is live."]
+      ],
+      "crossDocument": true,
+      "reachableBy": ["directive-cluster", "shard", "reduce"]
+    },
+    {
+      "id": "friday-deploys",
+      "kind": "contradiction",
+      "summary": "Deploy timing advice conflicts with no shared vocabulary: 'Shipping on a Friday afternoon is fine' versus 'Never deploy at the end of the week'. Only the claim-ledger reduce pass can join these.",
+      "sides": [["Shipping on a Friday afternoon is fine"], ["Never deploy at the end of the week."]],
+      "crossDocument": true,
+      "reachableBy": ["reduce", "shard"],
+      "vocabularyOverlap": false,
+      "history": "The first version of this defect read 'Deploy during business hours' against 'Never deploy at the end of the week'. Three independent refuters killed it, correctly: those two rules are jointly satisfiable by deploying Monday to Thursday, so it was an incompleteness rather than a contradiction. Rewritten to be unambiguous, because this defect exists to measure whether the claim ledger can join two statements with NO shared vocabulary -- not to measure whether refuters can spot a weak claim, which they demonstrably can.",
+      "isolationLimit": "This fixture is ~130 lines, which is a single shard, so the shard reader sees both documents and can reach this defect without the claim ledger -- and on the second run it did. The no-shared-vocabulary property still holds and is gate-tested, but the reduce pass is not ISOLATED here. Proving the ledger is load-bearing needs a fixture large enough to shard, so the two halves land in different readers. Until then, the evidence for the mechanism is the first run, where the shard reader had both documents in front of it and still missed the conflict that the ledger caught."
+    },
+    {
+      "id": "free-tier-limit",
+      "kind": "numeric-conflict",
+      "summary": "Free tier is 100 requests per minute in the guide and 200 in the reference.",
+      "sides": [
+        ["The free tier allows 100 requests per minute."],
+        ["The free tier allows 200 requests per minute."]
+      ],
+      "crossDocument": true,
+      "reachableBy": ["numeric-cluster", "shard", "reduce"]
+    },
+    {
+      "id": "duplicate-errors-heading",
+      "kind": "structure",
+      "summary": "reference.md has two headings that slug to #errors, so any link to it silently reaches only the first.",
+      "sides": [["## Errors"]],
+      "crossDocument": false,
+      "reachableBy": ["structure-lens"],
+      "deterministic": true
+    }
+  ],
+  "traps": [
+    {
+      "id": "changelog-timeout",
+      "why": "The changelog says the timeout WAS 10s. Historical, not a contradiction of the current 30s.",
+      "region": "history",
+      "phrases": ["The request timeout was raised from 10s to 30s."]
+    },
+    {
+      "id": "changelog-retry-budget",
+      "why": "The changelog says the retry budget WAS 5. Historical.",
+      "region": "history",
+      "phrases": ["The retry budget was 5."]
+    },
+    {
+      "id": "anti-pattern-retry",
+      "why": "The Examples section shows retrying a 4xx explicitly as something not to do. Deliberate disagreement.",
+      "region": "example",
+      "phrases": ["This example exists to show what the client does not do."]
+    },
+    {
+      "id": "quickstart-code-timeout",
+      "why": "The quickstart's shell sample uses --timeout 30s, which AGREES with the guide's prose. Not a conflict on its own.",
+      "region": "code",
+      "phrases": ["widget call --timeout 30s"]
+    },
+    {
+      "id": "free-vs-paid-tier",
+      "why": "100/min free and 1000/min paid are different scopes, not a conflict.",
+      "region": "prose",
+      "phrases": ["The paid tier allows 1000 requests"]
+    },
+    {
+      "id": "credentials-vs-authentication",
+      "why": "The two documents title the same topic 'Authentication' and 'Credentials'. Ordinary prose variety, not a term split.",
+      "region": "prose",
+      "phrases": ["## Credentials"]
+    },
+    {
+      "id": "reference-md-link",
+      "why": "guide.md links to reference.md#errors, which exists. Not dangling.",
+      "region": "prose",
+      "phrases": ["See [the reference](reference.md#errors)"]
+    }
+  ]
+}
