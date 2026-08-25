@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Thin CLI entry: everything lives under lib/ in bun. This wrapper only resolves
+# its own location and dispatches; it never reads a document or writes a plan
+# itself.
+set -e
+HERE="$(cd "$(dirname "$0")" && pwd -P)"
+if [ "${1:-}" = "setup" ] || [ "${1:-}" = "preference" ]; then
+  exec bun "$HERE/../lib/providers.ts" "$@"
+fi
+exec bun "$HERE/../lib/run.ts" "$@"

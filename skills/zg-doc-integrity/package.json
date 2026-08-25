@@ -1,0 +1,14 @@
+{
+  "name": "zg-doc-integrity",
+  "version": "0.1.0",
+  "description": "Finds internal contradictions and language drift across many documents treated as one, cites every instance, and edits nothing until a human picks a resolution.",
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.0",
+    "typescript": "^5.7.0"
+  }
+}

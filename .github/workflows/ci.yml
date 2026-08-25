@@ -12,6 +12,7 @@ jobs:
     outputs:
       stack-ship: ${{ steps.filter.outputs.stack-ship }}
       z-adversarial-review: ${{ steps.filter.outputs.z-adversarial-review }}
+      zg-doc-integrity: ${{ steps.filter.outputs.zg-doc-integrity }}
       dev-as-ai: ${{ steps.filter.outputs.dev-as-ai }}
       dev-as-human: ${{ steps.filter.outputs.dev-as-human }}
     steps:
@@ -24,6 +25,11 @@ jobs:
               - 'skills/stack-ship/**'
             z-adversarial-review:
               - 'skills/z-adversarial-review/**'
+            zg-doc-integrity:
+              # The cli.ts parity test compares against the sibling, so a change
+              # there has to re-run this skill's suite too.
+              - 'skills/zg-doc-integrity/**'
+              - 'skills/z-adversarial-review/lib/cli.ts'
             dev-as-ai:
               - 'skills/dev-as-ai/**'
             dev-as-human:
@@ -47,6 +53,20 @@ jobs:
     defaults:
       run:
         working-directory: skills/z-adversarial-review
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+
+  zg-doc-integrity:
+    needs: changes
+    if: needs.changes.outputs.zg-doc-integrity == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: skills/zg-doc-integrity
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
