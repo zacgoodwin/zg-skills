@@ -13,6 +13,7 @@ jobs:
       stack-ship: ${{ steps.filter.outputs.stack-ship }}
       z-adversarial-review: ${{ steps.filter.outputs.z-adversarial-review }}
       zg-doc-integrity: ${{ steps.filter.outputs.zg-doc-integrity }}
+      zg-verify-claims: ${{ steps.filter.outputs.zg-verify-claims }}
       dev-as-ai: ${{ steps.filter.outputs.dev-as-ai }}
       dev-as-human: ${{ steps.filter.outputs.dev-as-human }}
     steps:
@@ -30,6 +31,8 @@ jobs:
               # there has to re-run this skill's suite too.
               - 'skills/zg-doc-integrity/**'
               - 'skills/z-adversarial-review/lib/cli.ts'
+            zg-verify-claims:
+              - 'skills/zg-verify-claims/**'
             dev-as-ai:
               - 'skills/dev-as-ai/**'
             dev-as-human:
@@ -73,6 +76,20 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun test
+
+  zg-verify-claims:
+    needs: changes
+    if: needs.changes.outputs.zg-verify-claims == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: skills/zg-verify-claims
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: bash tests/gate.sh
 
   dev-as-ai:
     needs: changes
