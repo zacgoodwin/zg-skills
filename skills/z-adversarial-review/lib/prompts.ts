@@ -14,7 +14,7 @@
 // never holds the spec or the diff in its own context.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { handleCliError, parseFlags, str, ZError } from "./cli.ts";
+import { handleCliError, parseFlags, readJsonFile, str, ZError } from "./cli.ts";
 import { INHERIT_SEAT, SKEPTIC_SEAT_COUNT, allInherit, briefPath, cliCommand, type Seat } from "./models.ts";
 import { verdictInstructions, verdictPath, type ExpectedSpawn } from "./verdict.ts";
 
@@ -326,7 +326,7 @@ export function main(argv: string[]): number {
       if (!path) throw new ZError("Usage: prompts prompt <input.json> --verdict-path <p> --run <r> --ticket <n> --attempt <k> [...]");
       let input: any;
       try {
-        input = JSON.parse(readFileSync(path, "utf8"));
+        input = readJsonFile(path);
       } catch (e) {
         throw new ZError(`Cannot read input JSON at ${path}: ${(e as Error).message}`);
       }

@@ -11,7 +11,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { handleCliError, parseFlags, str, ZError } from "./cli.ts";
+import { handleCliError, parseFlags, readJsonFile, str, ZError } from "./cli.ts";
 
 // -- seat-token grammar --------------------------------------------------------
 
@@ -388,7 +388,7 @@ export function readSkepticPreference(deps: ProviderDeps = realDeps()): SkepticP
   const p = preferencePath(deps);
   if (!existsSync(p)) return null;
   try {
-    const raw = JSON.parse(readFileSync(p, "utf8"));
+    const raw = readJsonFile(p);
     if (!Array.isArray(raw.skepticModels) || raw.skepticModels.some((t: unknown) => typeof t !== "string")) {
       return null;
     }

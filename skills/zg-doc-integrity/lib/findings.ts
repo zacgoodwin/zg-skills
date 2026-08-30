@@ -340,6 +340,29 @@ export function seatVendor(seat: string): string {
   return head === "codex" || head === "agy" || head === "antigravity" ? (head === "antigravity" ? "agy" : head) : "claude";
 }
 
+// A CLI seat whose brief was too big for the provider's input cap runs as
+// several parts, each writing its own directory. Scoring must see ONE seat: two
+// parts of the same reader agreeing is that reader twice, and crediting it as
+// two independent seats is exactly the false corroboration the confidence score
+// exists to avoid.
+// "~" and not "-": a seat name ends in its provider's model suffix, and
+// CLI_MODEL_RE admits letters, digits, ".", "_", "/" and "-", so a model
+// genuinely named "foo-part-1of2" would be mistaken for a split part and
+// collapsed onto a seat that does not exist. "~" cannot occur in a provider,
+// a model, or any of the fixed seat names, and is a legal directory character.
+const PART_SUFFIX_RE = /~part-\d+of\d+$/;
+
+export function seatBase(seat: string): string {
+  return seat.replace(PART_SUFFIX_RE, "");
+}
+
+// The other half of the pair. Kept next to seatBase so the two cannot drift:
+// a name this builds that seatBase does not strip would silently credit one
+// reader as several.
+export function seatPartName(seat: string, index: number, total: number): string {
+  return total === 1 ? seat : `${seat}~part-${index + 1}of${total}`;
+}
+
 export function confidenceBase(seats: string[], allExact: boolean): number {
   const unique = [...new Set(seats)];
   const extra = Math.min(CONFIDENCE_PER_EXTRA_SEAT * Math.max(0, unique.length - 1), CONFIDENCE_EXTRA_SEAT_CAP);

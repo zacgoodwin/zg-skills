@@ -12,6 +12,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadBundle, type Bundle } from "../lib/bundle.ts";
 import {
   buildDirectiveInventory,
@@ -21,7 +22,7 @@ import {
 import { resolveQuote } from "../lib/findings.ts";
 import { structureFindings } from "../lib/structure.ts";
 
-const here = dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
+const here = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(here, "..", "evals", "fixtures", "drifted");
 const truth = JSON.parse(readFileSync(join(FIXTURE, "defects.json"), "utf8"));
 

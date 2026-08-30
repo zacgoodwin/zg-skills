@@ -211,3 +211,11 @@ check. Relay the table as-is.
 - **CLI seats execute with their vendor's permission prompts skipped**, scoped
   to the throwaway bundle directory. They read copies of the documents under
   review and nothing else. Stated plainly, not hidden.
+- **A CLI seat is always handed its brief, never sent to find it.** The whole
+  brief goes in as input — on stdin for codex, and for agy either inlined or, on
+  a brief past the OS argv limit, as one stdin message. A seat is never given a
+  path and left to decide how much to read, because one that was read 2.8% of
+  its material and reported no findings. If a brief exceeds the provider's input
+  cap it is split into parts, each a full seat whose silence is reported on its
+  own, and the split is named in the plan's skipped list. A brief so large that
+  a single cluster will not fit is refused by name rather than truncated.

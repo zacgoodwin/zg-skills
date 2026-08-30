@@ -15,7 +15,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { handleCliError, parseFlags, str, ZError } from "./cli.ts";
+import { handleCliError, parseFlags, readJsonFile, str, ZError } from "./cli.ts";
 
 export const CLI_PROVIDERS = ["codex", "agy"] as const;
 export type CliProvider = (typeof CLI_PROVIDERS)[number];
@@ -85,30 +85,73 @@ function shPath(p: string): string {
   return p.replace(/\\/g, "/");
 }
 
+// codex rejects an oversized prompt server-side before the model reads a word:
+// `input_error_code: input_too_large, max_chars: 1048576`. It is the only
+// published cap of the two, and agy's is unknown, so the same ceiling stands for
+// both -- a brief past it is beyond what either vendor handles anyway. A seat
+// whose brief exceeds this is SPLIT, never truncated and never silently skipped.
+export const CLI_BRIEF_CAP = 1_048_576;
+
+// agy's headless text mode takes the prompt as an argv value, and Windows caps a
+// whole command line at 32,767 characters, so an inlined brief of any real size
+// dies with "Argument list too long" (exit 126) before agy starts. Above this
+// budget -- the argv limit less room for the rest of the command -- the brief
+// goes in on stdin instead. Below it, the historical command is unchanged.
+export const CLI_ARGV_BUDGET = 24_000;
+
+// agy's stdin mode reads NDJSON, one message per line, and needs no prompt on
+// the command line. This is the exact envelope it accepts; any other `event`
+// value is warned about and ignored, which would look like a silent seat.
+export function ndjsonBrief(text: string): string {
+  return `${JSON.stringify({ event: "user", message: { role: "user", content: text } })}\n`;
+}
+
 // One exact command per provider. cwd is the throwaway BUNDLE directory, which
 // is the whole point: a CLI seat scoped there can read the documents under
 // review and nothing else in the repo.
 //
-// The brief is a FILE so no prompt text rides the command line, except agy's,
-// whose headless mode takes the prompt as an argument. Both are granted their
-// own output directory explicitly; agy additionally needs a read grant, because
-// it sandboxes reads to its granted directories while codex's workspace-write
-// sandbox restricts only writes.
-export function cliCommand(seat: CliSeat, bundleDir: string, outDir: string): string {
+// The brief is a FILE in every form, so no seat is ever asked to go find its own
+// material and decide how much of it to read -- a codex seat handed that choice
+// read 400 of 14,440 lines and reported a clean bill of health. Both providers
+// are granted their own output directory explicitly; agy additionally needs a
+// read grant, because it sandboxes reads to its granted directories while
+// codex's workspace-write sandbox restricts only writes.
+// Ask before composing, where a caller has somewhere better to go than a throw.
+// A refute brief cannot be split -- a refuter that saw half a finding is judging
+// a different finding -- so its caller drops that one seat and records it,
+// rather than aborting a merge that has already cost every discovery seat.
+export function briefFits(briefChars: number): boolean {
+  return briefChars <= CLI_BRIEF_CAP;
+}
+
+export function cliCommand(seat: CliSeat, bundleDir: string, outDir: string, briefChars: number): string {
   const cwd = shPath(bundleDir);
   const out = shPath(outDir);
   const brief = `${out}/brief.txt`;
+  if (!briefFits(briefChars)) {
+    throw new ZError(
+      `Brief for seat "${seatToken(seat)}" is ${briefChars} chars, over the ${CLI_BRIEF_CAP}-char provider input cap. ` +
+        `Split it before composing the command, or narrow the document patterns for this review.`
+    );
+  }
   switch (seat.provider) {
     case "codex":
       return `codex exec -s workspace-write --cd "${cwd}" -c 'sandbox_workspace_write.writable_roots=["${out}"]'${seat.model ? ` -m ${seat.model}` : ""} --skip-git-repo-check - < "${brief}"`;
     case "agy":
       // --print-timeout raised from agy's 5m default to fit the Bash tool's 10-minute cap.
-      return `cd "${cwd}" && agy -p "$(cat "${brief}")" --add-dir "${out}" --dangerously-skip-permissions --print-timeout 9m30s${seat.model ? ` --model ${seat.model}` : ""}`;
+      if (briefChars <= CLI_ARGV_BUDGET) {
+        return `cd "${cwd}" && agy -p "$(cat "${brief}")" --add-dir "${out}" --dangerously-skip-permissions --print-timeout 9m30s${seat.model ? ` --model ${seat.model}` : ""}`;
+      }
+      return `cd "${cwd}" && agy --input-format stream-json --output-format stream-json --add-dir "${out}" --dangerously-skip-permissions --print-timeout 9m30s${seat.model ? ` --model ${seat.model}` : ""} < "${out}/brief.ndjson"`;
   }
 }
 
 export function briefPath(outDir: string): string {
   return join(outDir, "brief.txt");
+}
+
+export function ndjsonBriefPath(outDir: string): string {
+  return join(outDir, "brief.ndjson");
 }
 
 // -- injectable process/filesystem seams -----------------------------------------------
@@ -364,7 +407,7 @@ export interface ProviderPreference {
 function readTokenFile(p: string, key: string): string[] | null {
   if (!existsSync(p)) return null;
   try {
-    const raw = JSON.parse(readFileSync(p, "utf8"));
+    const raw = readJsonFile(p);
     const list = raw?.[key];
     if (!Array.isArray(list) || list.some((t: unknown) => typeof t !== "string")) return null;
     return list;
