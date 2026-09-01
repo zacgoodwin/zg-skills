@@ -338,6 +338,83 @@ ${outputContract(findingsPath)}
 ${body}`;
 }
 
+// -- the outside-CLI discovery brief ----------------------------------------------
+
+export interface ClusterGroup {
+  terms: Cluster<TermMeta>[];
+  numerics: Cluster<NumericMeta>[];
+  directives: Cluster<DirectiveMeta>[];
+}
+
+const EMPTY_GROUP: ClusterGroup = { terms: [], numerics: [], directives: [] };
+
+// What an outside CLI reads: the same capped candidates the Claude cluster seats
+// get, in one text. Its value is a different vendor's judgment on the same
+// candidates, not a second full sweep.
+export function cliDiscoverBrief(g: ClusterGroup, findingsPath: string): string {
+  return [
+    termBrief(g.terms, findingsPath),
+    "\n\n===== ALSO CHECK THESE NUMERIC CLUSTERS =====\n",
+    numericBrief(g.numerics, findingsPath),
+    "\n\n===== ALSO CHECK THESE DIRECTIVE CLUSTERS =====\n",
+    directiveBrief(g.directives, findingsPath),
+  ].join("");
+}
+
+// Grow the split until every part renders under the cap. Quadratic in renders
+// over a list the caller has already capped at 30, which costs nothing.
+// ponytail: size-aware packing if that cap ever rises by an order of magnitude.
+function chunkToFit<K extends keyof ClusterGroup>(
+  kind: K,
+  list: ClusterGroup[K],
+  findingsPath: string,
+  cap: number
+): ClusterGroup[] {
+  if (list.length === 0) return [];
+  for (let parts = 1; ; parts++) {
+    const size = Math.ceil(list.length / parts);
+    const groups: ClusterGroup[] = [];
+    for (let i = 0; i < list.length; i += size) groups.push({ ...EMPTY_GROUP, [kind]: list.slice(i, i + size) });
+    // A single cluster over the cap on its own cannot be split further here; it
+    // is returned as-is and refused loudly by cliCommand rather than truncated.
+    if (parts >= list.length || groups.every((g) => cliDiscoverBrief(g, findingsPath).length <= cap)) return groups;
+  }
+}
+
+function merged(a: ClusterGroup, b: ClusterGroup): ClusterGroup {
+  return {
+    terms: [...a.terms, ...b.terms],
+    numerics: [...a.numerics, ...b.numerics],
+    directives: [...a.directives, ...b.directives],
+  };
+}
+
+// Split a CLI seat's candidates into as many parts as the provider's input cap
+// requires. Splitting is by cluster, never mid-text: half a rendered cluster is
+// a quote with no sites, which resolves to nothing and is discarded.
+//
+// One part is the normal case and the first thing tried, so a review whose
+// candidates fit composes exactly the brief it always did. Sharding is preferred
+// over handing the seat a pointer and letting it read what it likes, because
+// that is the discretion a codex seat used to read 2.8% of its brief and report
+// no findings -- a false negative that looks like coverage.
+export function splitCliDiscoverBrief(g: ClusterGroup, findingsPath: string, cap: number): ClusterGroup[] {
+  if (cliDiscoverBrief(g, findingsPath).length <= cap) return [g];
+  const bySection = [
+    ...chunkToFit("terms", g.terms, findingsPath, cap),
+    ...chunkToFit("numerics", g.numerics, findingsPath, cap),
+    ...chunkToFit("directives", g.directives, findingsPath, cap),
+  ];
+  const packed: ClusterGroup[] = [];
+  for (const part of bySection) {
+    const last = packed[packed.length - 1];
+    const join = last && merged(last, part);
+    if (join && cliDiscoverBrief(join, findingsPath).length <= cap) packed[packed.length - 1] = join;
+    else packed.push(part);
+  }
+  return packed;
+}
+
 // -- the cross-shard reduce brief -------------------------------------------------
 
 export interface ClaimRecord {

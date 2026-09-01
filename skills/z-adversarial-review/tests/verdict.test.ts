@@ -13,6 +13,10 @@ import {
   type ExpectedSpawn,
 } from "../lib/verdict.ts";
 
+// The mark as an escape: a literal BOM here is invisible and one encoding
+// cleanup away from making the test below prove nothing.
+const BOM = "\uFEFF";
+
 const RUN = "run-20260101-000000-aaaa";
 const EXPECT: ExpectedSpawn = { runId: RUN, ticket: 7, stage: "reviewer", attempt: 1 };
 
@@ -47,6 +51,18 @@ describe("readVerdict", () => {
     expect(readVerdict(join(scratch, "nope.json"), EXPECT).ok).toBe(false);
     expect(readVerdict(writeFile("{not json"), EXPECT).ok).toBe(false);
     expect(readVerdict(writeFile('"a string"'), EXPECT).ok).toBe(false);
+  });
+
+  // The behavioural half of the BOM guard. The source check in
+  // json-reads.test.ts only catches an inlined JSON.parse(readFileSync(...));
+  // readVerdict reads into a variable first, which is exactly the shape that
+  // dropped a skeptic's vote from its quorum with nothing saying so.
+  test("a UTF-8 BOM does not cost a skeptic its vote", () => {
+    const body = envelope({ result: "REVIEW-APPROVE" });
+    const withBom = readVerdict(writeFile(BOM + body), EXPECT);
+    expect(withBom).toEqual(readVerdict(writeFile(body), EXPECT));
+    if (!withBom.ok) throw new Error(withBom.reason);
+    expect(withBom.verdict.result).toBe("REVIEW-APPROVE");
   });
 
   test("every mis-addressed envelope field is INVALID and names the field", () => {

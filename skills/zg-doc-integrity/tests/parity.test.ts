@@ -12,8 +12,9 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const here = dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
+const here = dirname(fileURLToPath(import.meta.url));
 const mine = join(here, "..", "lib", "cli.ts");
 const sibling = join(here, "..", "..", "z-adversarial-review", "lib", "cli.ts");
 

@@ -18,7 +18,7 @@
 // same documents.
 import { readFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import { handleCliError, parseFlags, requireFlag, ZError } from "./cli.ts";
+import { handleCliError, parseFlags, parseJson, requireFlag, ZError } from "./cli.ts";
 import { isRunId } from "./run-id.ts";
 
 export const VERDICT_SCHEMA_VERSION = 1;
@@ -79,7 +79,7 @@ export function readVerdict(path: string, expect: ExpectedSpawn): VerdictCheck {
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = parseJson(raw);
   } catch (e) {
     return { ok: false, reason: `verdict at ${path} is not valid JSON (${(e as Error).message})` };
   }

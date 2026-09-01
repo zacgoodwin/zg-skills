@@ -9,9 +9,12 @@ import { dirname, join } from "node:path";
 import { ZError } from "../lib/cli.ts";
 import {
   checkBinary,
+  CLI_ARGV_BUDGET,
+  CLI_BRIEF_CAP,
   cliCommand,
   codexTrustHeader,
   hasCodexTrust,
+  ndjsonBrief,
   parseProvidersCsv,
   parseSeatToken,
   parseSeatTokens,
@@ -92,9 +95,10 @@ describe("seat tokens", () => {
 describe("cliCommand", () => {
   const bundle = "C:\\work\\bundle";
   const out = "C:\\work\\run\\seat-1";
+  const SMALL = 1000;
 
   test("codex is sandboxed to write only its own output directory", () => {
-    const cmd = cliCommand({ provider: "codex" }, bundle, out);
+    const cmd = cliCommand({ provider: "codex" }, bundle, out, SMALL);
     expect(cmd).toContain('--cd "C:/work/bundle"');
     expect(cmd).toContain('sandbox_workspace_write.writable_roots=["C:/work/run/seat-1"]');
     expect(cmd).toContain('< "C:/work/run/seat-1/brief.txt"');
@@ -102,7 +106,7 @@ describe("cliCommand", () => {
   });
 
   test("agy runs in the bundle directory with its output directory granted", () => {
-    const cmd = cliCommand({ provider: "agy" }, bundle, out);
+    const cmd = cliCommand({ provider: "agy" }, bundle, out, SMALL);
     expect(cmd).toContain('cd "C:/work/bundle"');
     expect(cmd).toContain('--add-dir "C:/work/run/seat-1"');
     expect(cmd).toContain('$(cat "C:/work/run/seat-1/brief.txt")');
@@ -111,21 +115,74 @@ describe("cliCommand", () => {
 
   test("no backslash survives into either command", () => {
     for (const provider of ["codex", "agy"] as const) {
-      expect(cliCommand({ provider }, bundle, out)).not.toContain("\\");
+      expect(cliCommand({ provider }, bundle, out, SMALL)).not.toContain("\\");
+      expect(cliCommand({ provider }, bundle, out, CLI_ARGV_BUDGET + 1)).not.toContain("\\");
     }
   });
 
   test("a model is passed with the provider's own flag", () => {
-    expect(cliCommand({ provider: "codex", model: "o3" }, bundle, out)).toContain("-m o3");
-    expect(cliCommand({ provider: "agy", model: "gemini-3" }, bundle, out)).toContain("--model gemini-3");
+    expect(cliCommand({ provider: "codex", model: "o3" }, bundle, out, SMALL)).toContain("-m o3");
+    expect(cliCommand({ provider: "agy", model: "gemini-3" }, bundle, out, SMALL)).toContain("--model gemini-3");
+    // Also on the stdin form, which is a separate string and has forgotten it before.
+    expect(cliCommand({ provider: "agy", model: "gemini-3" }, bundle, out, CLI_ARGV_BUDGET + 1)).toContain("--model gemini-3");
   });
 
   test("the working directory is the bundle, never the repo", () => {
     // The blinding contract in one assertion: an outside CLI is launched inside
     // the copied documents and is never told where they came from.
-    const cmd = cliCommand({ provider: "agy" }, "/tmp/run/bundle", "/tmp/run/seat-1");
+    const cmd = cliCommand({ provider: "agy" }, "/tmp/run/bundle", "/tmp/run/seat-1", SMALL);
     expect(cmd).toContain('cd "/tmp/run/bundle"');
     expect(cmd).not.toContain("repo");
+  });
+
+  // The argv cap is the OS's, not agy's: Windows stops a command line at 32,767
+  // characters, so an inlined brief of any real size died with "Argument list
+  // too long" before agy started. Nothing in the composer noticed.
+  test("agy inlines a small brief and switches to stdin above the argv budget", () => {
+    const inline = cliCommand({ provider: "agy" }, bundle, out, CLI_ARGV_BUDGET);
+    expect(inline).toContain('$(cat "C:/work/run/seat-1/brief.txt")');
+    expect(inline).not.toContain("stream-json");
+
+    const piped = cliCommand({ provider: "agy" }, bundle, out, CLI_ARGV_BUDGET + 1);
+    expect(piped).not.toContain("$(cat");
+    expect(piped).toContain("--input-format stream-json");
+    expect(piped).toContain("--output-format stream-json");
+    expect(piped).toContain('< "C:/work/run/seat-1/brief.ndjson"');
+    // -p and stdin input are mutually exclusive; agy refuses the pair outright.
+    expect(piped).not.toContain(" -p ");
+    expect(piped.length).toBeLessThan(CLI_ARGV_BUDGET);
+  });
+
+  test("codex never needs the argv form, so its command does not change with size", () => {
+    expect(cliCommand({ provider: "codex" }, bundle, out, SMALL)).toBe(
+      cliCommand({ provider: "codex" }, bundle, out, CLI_ARGV_BUDGET + 1)
+    );
+  });
+
+  test("a brief over the provider input cap is refused, naming the cap", () => {
+    for (const provider of ["codex", "agy"] as const) {
+      expect(() => cliCommand({ provider }, bundle, out, CLI_BRIEF_CAP + 1)).toThrow(ZError);
+      expect(() => cliCommand({ provider }, bundle, out, CLI_BRIEF_CAP)).not.toThrow();
+    }
+    try {
+      cliCommand({ provider: "codex" }, bundle, out, CLI_BRIEF_CAP + 1);
+    } catch (e) {
+      expect((e as Error).message).toContain(String(CLI_BRIEF_CAP));
+    }
+  });
+});
+
+describe("ndjsonBrief", () => {
+  // agy warns and ignores any event value it does not know, which would look
+  // exactly like a seat that ran and found nothing.
+  test("is one line agy accepts, carrying the whole brief", () => {
+    const line = ndjsonBrief('a brief with "quotes" and\nnewlines');
+    expect(line.endsWith("\n")).toBe(true);
+    expect(line.trimEnd().includes("\n")).toBe(false);
+    expect(JSON.parse(line)).toEqual({
+      event: "user",
+      message: { role: "user", content: 'a brief with "quotes" and\nnewlines' },
+    });
   });
 });
 

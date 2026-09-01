@@ -66,9 +66,24 @@ export function requireFlag(flags: ParsedArgs["flags"], name: string): string {
   return v;
 }
 
+// Agent-written JSON arrives with a UTF-8 BOM often enough to matter: PowerShell
+// and Windows-native tooling emit one by default, and JSON.parse rejects a
+// leading BOM. That failure is not loud -- a verdict lost to it simply drops out
+// of its quorum and the finding is scored off a short count. Every JSON read
+// goes through here so it cannot come back in one forgotten call site.
+export function parseJson(text: string): any {
+  return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+}
+
+// A JSON file read, BOM tolerated. Throws what JSON.parse throws; callers that
+// treat a broken file as an answer rather than an error catch it themselves.
+export function readJsonFile(path: string): any {
+  return parseJson(readFileSync(path, "utf8"));
+}
+
 export function readJson(path: string): any {
   try {
-    return JSON.parse(readFileSync(path, "utf8"));
+    return readJsonFile(path);
   } catch (e) {
     throw new ZError(`Cannot read JSON at ${path}: ${(e as Error).message}`);
   }

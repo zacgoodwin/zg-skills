@@ -4,6 +4,28 @@ All notable changes to `zg-doc-integrity`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Outside CLI discovery seats survive a large document set.** The seat was
+  handed the FULL cluster inventory while the Claude cluster seats got the
+  capped 30, so on a 7-file set its brief reached 1,468,325 characters and both
+  seats died before reading a word: codex on its 1,048,576-character server-side
+  input cap, agy on the Windows argv limit. The plan reported only "1 discovery
+  seat(s) wrote nothing". The CLI seat now reads the same capped candidates as
+  every other cluster seat (149,810 characters on that set), agy takes a brief
+  past the argv budget on stdin instead of the command line, and a brief still
+  over the provider cap is split into parts rather than truncated or skipped —
+  each part a full seat whose silence is reported on its own, with the split
+  named in the plan's skipped list. A seat is never handed a path and left to
+  decide how much to read.
+
+- **A UTF-8 BOM no longer costs a seat its vote.** `JSON.parse` rejects a
+  leading BOM, so a verdict written with one was discarded as unparseable and
+  the finding's refutation quorum was counted one short, with nothing saying so.
+  Every JSON read now goes through `parseJson` / `readJsonFile` in `lib/cli.ts`,
+  which tolerates the mark; genuinely malformed JSON still soft-fails with its
+  existing reason. A source guard keeps new call sites from reopening it.
+
 ## [0.1.0] - 2026-08-25
 
 First release.

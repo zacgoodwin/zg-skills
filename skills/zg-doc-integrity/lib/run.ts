@@ -9,7 +9,7 @@
 //
 // One run = one directory. `continue` re-reads that directory rather than
 // remembering anything, so a review survives the session that started it.
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   type Bundle,
@@ -17,7 +17,7 @@ import {
   loadBundle,
   writeBundleDir,
 } from "./bundle.ts";
-import { handleCliError, parseFlags, str, ZError } from "./cli.ts";
+import { handleCliError, parseFlags, readJsonFile, str, ZError } from "./cli.ts";
 import {
   type Finding,
   type RawFinding,
@@ -25,6 +25,8 @@ import {
   refutationPriority,
   resolveAndMerge,
   scoreConfidence,
+  seatBase,
+  seatPartName,
 } from "./findings.ts";
 import { buildInventories } from "./inventory.ts";
 import {
@@ -42,6 +44,7 @@ import {
   writePlan,
 } from "./plan.ts";
 import {
+  cliDiscoverBrief,
   directiveBrief,
   FINDINGS_FINAL_LINE,
   numericBrief,
@@ -49,6 +52,7 @@ import {
   refuteBrief,
   shardBrief,
   spawnStub,
+  splitCliDiscoverBrief,
   termBrief,
   VERDICT_FINAL_LINE,
   type ClaimRecord,
@@ -64,12 +68,18 @@ import {
 } from "./apply.ts";
 import {
   briefPath,
+  CLI_BRIEF_CAP,
+  briefFits,
   cliCommand,
+  ndjsonBrief,
+  ndjsonBriefPath,
+  realDeps,
   parseSeatTokens,
   preflightProviders,
   providersIn,
   readProviderPreference,
   type CliSeat,
+  type ProviderDeps,
 } from "./providers.ts";
 import { assembleNextRound, carryForward, MAX_ROUNDS, regenBrief } from "./regenerate.ts";
 import { mintRunId, roundSegment, runRoot } from "./run-id.ts";
@@ -102,13 +112,23 @@ function statePath(root: string): string {
 function readState(root: string): RunState {
   const p = statePath(root);
   if (!existsSync(p)) throw new ZError(`No run state at ${p}. Start a review with \`prepare\` first.`);
-  const s = JSON.parse(readFileSync(p, "utf8")) as RunState;
+  const s = readJsonFile(p) as RunState;
   if (s.schema !== 1) throw new ZError(`Run state schema ${s.schema} (this binary understands 1).`);
   return s;
 }
 
-function writeState(root: string, s: RunState): void {
-  writeFileSync(statePath(root), JSON.stringify(s, null, 2));
+// Written through a temporary file and renamed, because latestRun treats the
+// presence of this file as "this run is complete and runnable". A direct write
+// interrupted partway would leave a state.json that exists and does not parse,
+// which is the same masking problem one layer down. rename within a directory
+// is atomic on both POSIX and Windows, so the file is either absent or whole.
+// Exported for the fault-injection test, which blocks the temporary path and
+// asserts nothing gets published. Not part of the verb surface.
+export function writeState(root: string, s: RunState): void {
+  const p = statePath(root);
+  const tmp = `${p}.tmp`;
+  writeFileSync(tmp, JSON.stringify(s, null, 2));
+  renameSync(tmp, p);
 }
 
 // The newest run under the state directory. Lets `continue` work with no
@@ -116,7 +136,14 @@ function writeState(root: string, s: RunState): void {
 export function latestRun(repoRoot: string): string | null {
   const runs = join(repoRoot, STATE_DIR, "runs");
   if (!existsSync(runs)) return null;
-  const ids = readdirSync(runs).filter((d) => /^run-\d{8}-\d{6}-[0-9a-f]{4}$/.test(d)).sort();
+  // state.json is the LAST thing prepare writes, so a run directory without one
+  // is a setup that died partway -- bundle and briefs on disk, nothing runnable.
+  // Those must not win the "latest" race: a crashed prepare would otherwise mask
+  // the last usable review and send every argument-less merge, collect and
+  // continue at a run that cannot answer.
+  const ids = readdirSync(runs)
+    .filter((d) => /^run-\d{8}-\d{6}-[0-9a-f]{4}$/.test(d) && existsSync(join(runs, d, "state.json")))
+    .sort();
   return ids.length === 0 ? null : join(runs, ids[ids.length - 1]);
 }
 
@@ -193,7 +220,7 @@ function recordSkipped(roundDirPath: string, notes: string[]): void {
   let prior: string[] = [];
   if (existsSync(p)) {
     try {
-      const raw = JSON.parse(readFileSync(p, "utf8"));
+      const raw = readJsonFile(p);
       if (Array.isArray(raw)) prior = raw.filter((x) => typeof x === "string");
     } catch {
       // An unreadable ledger must not lose the note we are adding now.
@@ -209,16 +236,29 @@ function writeBrief(dir: string, text: string): string {
   return p;
 }
 
+// A CLI seat gets its brief twice: as text, and as the one-line NDJSON message
+// agy's stdin mode reads. Written unconditionally rather than behind a size
+// check, so the file is never the reason a command that chose the stdin form
+// fails. brief.txt stays the readable record either way.
+function writeCliBrief(dir: string, text: string): string {
+  const p = writeBrief(dir, text);
+  writeFileSync(ndjsonBriefPath(dir), ndjsonBrief(text));
+  return p;
+}
+
 export function prepare(opts: {
   patterns: string[];
   cwd: string;
   repoRoot: string;
   providerTokens: string[];
   now: number;
+  // Injected only by tests, so the CLI-seat path can be exercised on a machine
+  // that has neither vendor installed.
+  deps?: ProviderDeps;
 }): PrepareManifest {
   const cliSeats: CliSeat[] = parseSeatTokens(opts.providerTokens);
   // Fail before any directory is created: half a review is worse than none.
-  preflightProviders(providersIn(cliSeats));
+  preflightProviders(providersIn(cliSeats), opts.deps ?? realDeps());
 
   const bundle = loadBundle(opts.patterns, opts.cwd, opts.repoRoot);
   const runId = mintRunId(opts.now);
@@ -278,29 +318,56 @@ export function prepare(opts: {
   if (directives.length > 0) cluster("directive-cluster", "directive", directiveBrief(directives, join(seatDir("directive-cluster"), "findings.json")));
 
   // Outside CLIs read the clusters, not every shard: their value is a different
-  // vendor's judgment on the same candidates, not a second full sweep.
+  // vendor's judgment on the same candidates, not a second full sweep. The
+  // CAPPED lists, same as the Claude cluster seats -- handing the CLI the full
+  // inventory instead is what produced a 1.4M-char brief that killed both seats
+  // before either read a word, one on codex's input cap and one on the argv cap.
   for (const seat of cliSeats) {
     const name = `cli-${seat.provider}${seat.model ? `-${seat.model}` : ""}`;
-    const dir = seatDir(name);
-    const findingsPath = join(dir, "findings.json");
-    const text = [
-      termBrief(inv.terms, findingsPath),
-      "\n\n===== ALSO CHECK THESE NUMERIC CLUSTERS =====\n",
-      numericBrief(inv.numerics, findingsPath),
-      "\n\n===== ALSO CHECK THESE DIRECTIVE CLUSTERS =====\n",
-      directiveBrief(inv.directives, findingsPath),
-    ].join("");
-    spawns.push({
-      seat: name,
-      kind: "cli-discover",
-      briefPath: writeBrief(dir, text),
-      outPath: findingsPath,
-      command: cliCommand(seat, bundleDir, dir),
+    // Two different paths, on purpose. The unsplit seat writes to its own
+    // directory, so THAT is the path that decides whether a split is needed at
+    // all -- sizing the question with a suffix the seat will never carry splits
+    // a near-limit brief for no reason and files a cap note that did not happen.
+    // Once a split IS needed, each part's directory carries a "~part-NofM"
+    // suffix and the findings path is embedded in the brief several times, so
+    // the parts are sized against the LONGEST path any part could be given. A
+    // split cannot produce more parts than there are clusters, so that bound is
+    // exact and needs no margin guess.
+    const group = { terms, numerics, directives };
+    const unsplitPath = join(seatDir(name), "findings.json");
+    const maxParts = Math.max(1, terms.length + numerics.length + directives.length);
+    const sizingPath = join(seatDir(seatPartName(name, maxParts - 1, maxParts)), "findings.json");
+    const parts =
+      cliDiscoverBrief(group, unsplitPath).length <= CLI_BRIEF_CAP
+        ? [group]
+        : splitCliDiscoverBrief(group, sizingPath, CLI_BRIEF_CAP);
+    if (parts.length > 1) {
+      skipped.push(
+        `seat ${name}'s brief was over the ${CLI_BRIEF_CAP}-char provider input cap and ran as ${parts.length} parts; each part is a whole seat and its silence is reported separately`
+      );
+    }
+    parts.forEach((group, i) => {
+      const partName = seatPartName(name, i, parts.length);
+      const dir = seatDir(partName);
+      const findingsPath = join(dir, "findings.json");
+      const text = cliDiscoverBrief(group, findingsPath);
+      spawns.push({
+        seat: partName,
+        kind: "cli-discover",
+        briefPath: writeCliBrief(dir, text),
+        outPath: findingsPath,
+        command: cliCommand(seat, bundleDir, dir, text.length),
+      });
     });
   }
 
   const structure = structureFindings(bundle);
   writeFileSync(join(rDir, "structure.json"), JSON.stringify(structure, null, 2));
+
+  // The skipped ledger before the state, so state.json really is the last file
+  // prepare writes. latestRun reads its presence as "this run is complete", and
+  // that is only true if nothing else is still outstanding when it lands.
+  recordSkipped(rDir, skipped);
 
   const documents = bundle.docs.map((d) => ({ id: d.id, relPath: d.relPath, lines: d.lines.length }));
   writeState(root, {
@@ -313,8 +380,6 @@ export function prepare(opts: {
     providers: opts.providerTokens,
     documents,
   });
-
-  recordSkipped(rDir, skipped);
 
   return {
     runId,
@@ -336,7 +401,7 @@ export function prepare(opts: {
 function readFindingsFile(path: string): RawFinding[] {
   if (!existsSync(path)) return [];
   try {
-    const raw = JSON.parse(readFileSync(path, "utf8"));
+    const raw = readJsonFile(path);
     return Array.isArray(raw?.findings) ? raw.findings : [];
   } catch {
     return [];
@@ -346,7 +411,7 @@ function readFindingsFile(path: string): RawFinding[] {
 function readClaimsFile(path: string, shardId: string): ClaimRecord[] {
   if (!existsSync(path)) return [];
   try {
-    const raw = JSON.parse(readFileSync(path, "utf8"));
+    const raw = readJsonFile(path);
     if (!Array.isArray(raw?.claims)) return [];
     return raw.claims
       .filter((c: any) => typeof c?.quote === "string" && typeof c?.assertion === "string")
@@ -388,13 +453,13 @@ export function merge(root: string, opts: { reduceDone?: boolean } = {}): MergeM
     const findingsPath = join(dir, "findings.json");
     if (existsSync(findingsPath)) heard.push(seat);
     else silent.push(seat);
-    batches.push({ seat, findings: readFindingsFile(findingsPath) });
+    batches.push({ seat: seatBase(seat), findings: readFindingsFile(findingsPath) });
     claims.push(...readClaimsFile(join(dir, "claims.json"), seat));
   }
 
   // The structure lens needs no agent and never goes silent.
   const structure = existsSync(join(rDir, "structure.json"))
-    ? JSON.parse(readFileSync(join(rDir, "structure.json"), "utf8"))
+    ? readJsonFile(join(rDir, "structure.json"))
     : { findings: [], unverifiableRefs: [] };
   batches.push({ seat: STRUCTURE_SEAT, findings: structure.findings });
 
@@ -452,30 +517,39 @@ export function merge(root: string, opts: { reduceDone?: boolean } = {}): MergeM
         const dir = join(rDir, "refute", `${f.id}-${name}`);
         const verdictPath = join(dir, "verdict.json");
         const spawn: ExpectedSpawn = { runId: state.runId, round: state.round, stage: "refute", attempt: 1 };
-        const brief = writeBrief(
-          dir,
-          refuteBrief({
-            findingTitle: f.title,
-            findingSummary: f.summary,
-            kind: f.kind,
-            sides: f.sides.map((s) => ({
-              label: s.label,
-              quote: s.quote,
-              context: s.instances
-                .map((inst) => `${inst.relPath}:${inst.line}\n${contextOf(bundle, inst.docId, inst.line)}`)
-                .join("\n\n"),
-            })),
-            verdictPath,
-            verdictBlock: verdictInstructions("refute", verdictPath, spawn),
-          })
-        );
         const cli = cliSeats.find((s) => `${s.provider}${s.model ? `-${s.model}` : ""}` === name);
+        const briefText = refuteBrief({
+          findingTitle: f.title,
+          findingSummary: f.summary,
+          kind: f.kind,
+          sides: f.sides.map((s) => ({
+            label: s.label,
+            quote: s.quote,
+            context: s.instances
+              .map((inst) => `${inst.relPath}:${inst.line}\n${contextOf(bundle, inst.docId, inst.line)}`)
+              .join("\n\n"),
+          })),
+          verdictPath,
+          verdictBlock: verdictInstructions("refute", verdictPath, spawn),
+        });
+        // A refute brief cannot be split the way a discovery brief can: a
+        // refuter shown half a finding is judging a different finding. So an
+        // oversized one costs that finding ONE seat, recorded, rather than
+        // throwing out of a merge that has already spent every discovery seat.
+        // `of` is the number of refuter directories on disk, so a seat that is
+        // never dispatched lowers the quorum honestly instead of going missing.
+        if (cli && !briefFits(briefText.length)) {
+          skipped.push(
+            `refuter ${name} for ${f.id} was not dispatched: its brief is ${briefText.length} chars, over the ${CLI_BRIEF_CAP}-char provider input cap; the finding is judged by its remaining refuters`
+          );
+          return;
+        }
         refuteSpawns.push({
           seat: `${f.id}-${name}`,
           kind: "refute",
-          briefPath: brief,
+          briefPath: cli ? writeCliBrief(dir, briefText) : writeBrief(dir, briefText),
           outPath: verdictPath,
-          command: cli ? cliCommand(cli, join(root, "bundle"), dir) : undefined,
+          command: cli ? cliCommand(cli, join(root, "bundle"), dir, briefText.length) : undefined,
         });
       });
     }
@@ -524,7 +598,7 @@ export function collect(root: string): CollectManifest {
   const rDir = roundDir(root, state.round);
   const mergedPath = join(rDir, "merged.json");
   if (!existsSync(mergedPath)) throw new ZError(`No merged findings at ${mergedPath}. Run \`merge\` first.`);
-  const merged = JSON.parse(readFileSync(mergedPath, "utf8")) as { findings: Finding[]; unverifiable: Unverifiable[] };
+  const merged = readJsonFile(mergedPath) as { findings: Finding[]; unverifiable: Unverifiable[] };
 
   // Quorum is counted off the verdict files on disk, never off any agent's
   // account of what its refuters said.
@@ -544,7 +618,7 @@ export function collect(root: string): CollectManifest {
   });
 
   const structure = existsSync(join(rDir, "structure.json"))
-    ? JSON.parse(readFileSync(join(rDir, "structure.json"), "utf8"))
+    ? readJsonFile(join(rDir, "structure.json"))
     : { unverifiableRefs: [] };
 
   const priorPlanPath = state.round > 1 ? join(roundDir(root, state.round - 1), "plan.json") : null;
@@ -552,7 +626,7 @@ export function collect(root: string): CollectManifest {
 
   const skipped: string[] = [];
   const skippedPath = join(rDir, "skipped.json");
-  if (existsSync(skippedPath)) skipped.push(...JSON.parse(readFileSync(skippedPath, "utf8")));
+  if (existsSync(skippedPath)) skipped.push(...readJsonFile(skippedPath));
 
   const plan: PlanFile = {
     schema: PLAN_SCHEMA_VERSION,
@@ -750,7 +824,7 @@ export function verify(root: string): VerifyManifest {
   const rDir = roundDir(root, state.round);
   const p = join(rDir, "work-units.json");
   if (!existsSync(p)) throw new ZError(`No apply was planned in this round (${p} is missing).`);
-  const { units, snapshots } = JSON.parse(readFileSync(p, "utf8")) as { units: FileWorkUnit[]; snapshots: Snapshot[] };
+  const { units, snapshots } = readJsonFile(p) as { units: FileWorkUnit[]; snapshots: Snapshot[] };
   const report = verifyAll(units, snapshots);
   return {
     runId: state.runId,

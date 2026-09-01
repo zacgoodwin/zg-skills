@@ -12,6 +12,8 @@ import { loadBundle, type Bundle } from "../lib/bundle.ts";
 import {
   bandFor,
   confidenceBase,
+  seatBase,
+  seatPartName,
   CONFIDENCE_APPENDIX_FLOOR,
   CONFIDENCE_DETERMINISTIC,
   fingerprintOf,
@@ -249,6 +251,32 @@ describe("confidence", () => {
       expect(confidenceBase(c.seats, c.exact)).toBe(c.want);
     });
   }
+
+  // A CLI seat whose brief exceeded the provider's input cap runs as parts. They
+  // are one reader, and crediting them as several would manufacture exactly the
+  // agreement the score is supposed to measure.
+  test("parts of one split seat are one seat", () => {
+    expect(seatBase(seatPartName("cli-codex", 0, 3))).toBe("cli-codex");
+    expect(seatBase(seatPartName("cli-codex", 0, 1))).toBe("cli-codex");
+    expect(seatPartName("cli-codex", 1, 3)).toBe("cli-codex~part-2of3");
+    // Untouched for a seat that never split, including one with a model suffix.
+    expect(seatBase("cli-agy-gemini-3")).toBe("cli-agy-gemini-3");
+    expect(seatBase("shard-1")).toBe("shard-1");
+    // A model may legally contain "-part-1of2"; the suffix uses "~", which
+    // CLI_MODEL_RE forbids, so a real model name can never be mistaken for one.
+    expect(seatBase("cli-codex-part-1of2")).toBe("cli-codex-part-1of2");
+    expect(seatBase(seatPartName("cli-codex-part-1of2", 0, 2))).toBe("cli-codex-part-1of2");
+
+    // prepare sizes a split against the widest suffix it could ever generate.
+    // That is only sound if the widest really is the longest string.
+    const widest = seatPartName("cli-codex", 89, 90).length;
+    for (let total = 2; total <= 90; total++) {
+      for (const i of [0, total - 1]) expect(seatPartName("cli-codex", i, total).length).toBeLessThanOrEqual(widest);
+    }
+
+    const parts = [0, 1, 2].map((i) => seatBase(seatPartName("cli-codex", i, 3)));
+    expect(confidenceBase(parts, true)).toBe(confidenceBase(["cli-codex"], true));
+  });
 
   test("refutationOutcome buckets every combination", () => {
     expect(refutationOutcome(0, 0)).toBe("unrefuted");

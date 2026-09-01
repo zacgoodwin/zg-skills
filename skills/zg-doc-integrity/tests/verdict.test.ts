@@ -30,6 +30,11 @@ afterAll(() => {
   } catch {}
 });
 
+// Written as an escape on purpose: a literal BOM sitting invisibly in this file
+// is one "fix the encoding" pass away from turning the test below into a
+// tautology that still passes.
+export const BOM = "\uFEFF";
+
 let seq = 0;
 function writeVerdict(body: unknown): string {
   const dir = join(scratch, `v${seq++}`);
@@ -67,6 +72,18 @@ describe("readVerdict", () => {
     const check = readVerdict(writeVerdict("{ not json"), EXPECT);
     expect(check).toMatchObject({ ok: false });
     if (!check.ok) expect(check.reason).toMatch(/not valid JSON/);
+  });
+
+  // A vote lost to a byte-order mark is the quiet wrongness this skill exists to
+  // exclude: the seat answered, its file was discarded, and the quorum was
+  // counted one short with nothing saying so. Windows tooling and PowerShell
+  // based agents emit BOMs routinely, so this is a recurring input, not a freak.
+  test("a UTF-8 BOM does not cost a seat its vote", () => {
+    const body = JSON.stringify(good({ result: "REFUTED" }));
+    const withBom = readVerdict(writeVerdict(BOM + body), EXPECT);
+    expect(withBom).toEqual(readVerdict(writeVerdict(body), EXPECT));
+    expect(withBom.ok).toBe(true);
+    if (withBom.ok) expect(withBom.verdict.result).toBe("REFUTED");
   });
 
   test("a JSON array is not a verdict", () => {

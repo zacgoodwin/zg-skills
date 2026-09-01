@@ -13,7 +13,7 @@
 // with the gaps named, and any comment text anywhere sends the round back for
 // regeneration rather than through to apply.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { ZError } from "./cli.ts";
+import { readJsonFile, ZError } from "./cli.ts";
 import {
   type Finding,
   type Unverifiable,
@@ -499,7 +499,7 @@ export function emptyDecisions(): Decisions {
 export function readDecisions(path: string): Decisions {
   if (!existsSync(path)) return emptyDecisions();
   try {
-    const raw = JSON.parse(readFileSync(path, "utf8"));
+    const raw = readJsonFile(path);
     return {
       declined: Array.isArray(raw?.declined) ? raw.declined : [],
       resolved: Array.isArray(raw?.resolved) ? raw.resolved : [],
@@ -549,7 +549,7 @@ export function declinedFingerprints(d: Decisions): Set<string> {
 export function loadPlanFile(path: string): PlanFile {
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(path, "utf8"));
+    raw = readJsonFile(path);
   } catch (e) {
     throw new ZError(`Cannot read plan JSON at ${path}: ${(e as Error).message}`);
   }
