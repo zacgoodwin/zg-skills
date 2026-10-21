@@ -3,3 +3,4 @@ node_modules/
 .kata.local.toml
 # roborev snapshots
 /.roborev/
+.claude/worktrees/
