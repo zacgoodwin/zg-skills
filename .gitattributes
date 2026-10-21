@@ -1,0 +1,3 @@
+# LF everywhere, even under a system core.autocrlf=true: roborev refine
+# builds its patch in a worktree and git apply fails against CRLF copies.
+* text=auto eol=lf
