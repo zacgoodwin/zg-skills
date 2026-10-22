@@ -155,8 +155,8 @@ or `{ "ok": false, "reason": "…" }`.
 |---|---|
 | `result` | One of `REVIEW-APPROVE`, `REVIEW-FINDINGS`, `NEEDS-HUMAN`, `BLOCKED`, `CONFUSED`. |
 | `notes` | The reviewer's human-facing line: findings list, question, or reason. `""` when absent. |
-| `confidence` | 0–100 from the verdict's evidence, or `null` when absent or out of range. On adversarial runs the reviewer reads it off a fixed lookup table over the skeptic verdicts it held (3 UPHELD of 3 → 100, 2 → 67, 1 → 33, 0 → 0; short lineups have their own rows) — never model arithmetic. |
-| `quorum` | Counted off the three canonical `skeptic-<1,2,3>/verdict.json` files `prepare` itself laid out under `--run-root`; `null` when `--adversarial` is `false`. `received` = valid files found, `of` = 3, `unrefuted` = valid verdicts whose result is `UPHELD`, `invalid` = one reason per unusable canonical path (e.g. missing). |
+| `confidence` | 0–100, or `null`. Single pass: the verdict's own `evidence.confidence`, `null` when absent or out of range. Adversarial with at least one valid skeptic verdict on disk: computed by `collect` as `round(unrefuted / received × 100)` for every result, which reproduces the reviewer's lookup table (3 UPHELD of 3 → 100, 2 → 67, 1 → 33, 0 → 0; short lineups have their own rows); the reviewer's own number is ignored. Adversarial with no skeptic verdicts: the reviewer's own number, capped at 99. |
+| `quorum` | Counted off the three canonical `skeptic-<1,2,3>/verdict.json` files `prepare` itself laid out under `--run-root`; `null` when `--adversarial` is `false`. `received` = valid files found, `of` = 3, `unrefuted` = valid verdicts whose result is `UPHELD` and whose `notes` do not start `PROVISIONAL: `, `invalid` = one reason per unusable canonical path (e.g. missing, or non-string `notes`). |
 
 `collect` derives those three skeptic paths itself from `--run-root` and
 `--ticket` — it never reads the reviewer's own

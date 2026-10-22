@@ -20,7 +20,7 @@ COLLECT THEM INSIDE THIS TURN. Spawn all three in ONE message, as three Agent to
 
 You therefore never wait for a skeptic, and you never re-count for one either: each skeptic reports by WRITING ITS OWN VERDICT FILE, and the harness counts those files itself -- a skeptic that lands after you return still counts, and a tally you write cannot vouch for a file that is not there. Once your three tool calls return, read whichever skeptic verdict files exist, weigh any refutation's evidence in your own judgment, and write YOUR verdict. Do not spawn replacements, do not re-ping, and do not end your turn to "wait", "check back", or "await completion notifications" -- those are not slower routes to a verdict, they are how your review gets thrown away.
 
-In your verdict file's evidence, set "skepticVerdictPaths" to the paths of ONLY the skeptic verdict files that exist when you look (0-3 of them; list none that you cannot read). Set "confidence" off this table over the k verdicts you actually hold -- do no arithmetic:
+In your verdict file's evidence, set "skepticVerdictPaths" to the paths of ONLY the skeptic verdict files that exist when you look (0-3 of them; list none that you cannot read). Set "confidence" off this table over the k verdicts you actually hold, counting only non-provisional UPHELD verdicts as UPHELD -- do no arithmetic:
 - k=3: 3 UPHELD -> 100, 2 -> 67, 1 -> 33, 0 -> 0
 - k=2: 2 UPHELD -> 100, 1 -> 50, 0 -> 0
 - k=1: 1 UPHELD -> 100, 0 -> 0
