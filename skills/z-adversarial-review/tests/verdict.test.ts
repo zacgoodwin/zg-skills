@@ -95,6 +95,18 @@ describe("readVerdict", () => {
     const r = readVerdict(writeFile(envelope({ evidence: [1, 2] })), EXPECT);
     expect(r.ok).toBe(false);
   });
+
+  test("non-string notes are INVALID; absent or null notes are fine", () => {
+    for (const notes of [42, ["PROVISIONAL: x"], { a: 1 }, true]) {
+      const r = readVerdict(writeFile(envelope({ notes })), EXPECT);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain("notes must be a string");
+    }
+    expect(readVerdict(writeFile(envelope({ notes: undefined })), EXPECT).ok).toBe(true);
+    const nul = readVerdict(writeFile(envelope({ notes: null })), EXPECT);
+    if (!nul.ok) throw new Error(nul.reason);
+    expect("notes" in nul.verdict).toBe(false);
+  });
 });
 
 describe("quorumFromDisk", () => {
@@ -123,6 +135,24 @@ describe("quorumFromDisk", () => {
     expect(q.invalid).toHaveLength(3);
     expect(q.invalid.join("\n")).toContain("outside");
     expect(q.invalid.join("\n")).toContain("listed twice");
+  });
+
+  test("does not tally a provisional UPHELD as unrefuted", () => {
+    const p = join(reviewerDir, "skeptic-1", "verdict.json");
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, envelope({ stage: "skeptic", result: "UPHELD", notes: "PROVISIONAL: tests not run" }));
+
+    expect(quorumFromDisk([p], runRoot, EXPECT)).toMatchObject({ received: 1, unrefuted: 0, invalid: [] });
+  });
+
+  test("a skeptic verdict with numeric notes is named invalid, not a crash", () => {
+    const p = join(reviewerDir, "skeptic-2", "verdict.json");
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, envelope({ stage: "skeptic", result: "UPHELD", notes: 7 }));
+
+    const q = quorumFromDisk([p], runRoot, EXPECT);
+    expect(q).toMatchObject({ received: 0, unrefuted: 0 });
+    expect(q.invalid.join("\n")).toContain("notes must be a string");
   });
 });
 

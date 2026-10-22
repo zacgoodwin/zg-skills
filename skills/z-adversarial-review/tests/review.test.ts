@@ -14,10 +14,10 @@ import {
   extractAcceptanceCriteria,
   prepare,
 } from "../lib/review.ts";
-import { AGENT_MODELS, CLI_PROVIDERS, briefPath, writeSkepticPreference, type ProviderDeps } from "../lib/models.ts";
+import { AGENT_MODELS, CLI_PROVIDERS, briefPath, cliCommand, writeSkepticPreference, type ProviderDeps } from "../lib/models.ts";
 import { REVIEWER_INPUT_KEYS } from "../lib/prompts.ts";
 import { isRunId } from "../lib/run-id.ts";
-import { VERDICT_SCHEMA_VERSION, quorumFromDisk } from "../lib/verdict.ts";
+import { VERDICT_SCHEMA_VERSION, quorumFromDisk, verdictPath } from "../lib/verdict.ts";
 import { ZError } from "../lib/cli.ts";
 
 // -- fixture repo -------------------------------------------------------------
@@ -418,8 +418,188 @@ describe("prepare per-seat models", () => {
 // -- mock provider end-to-end (one parameterized mock, two invocations) -------
 
 describe("mock-provider verdicts count in the quorum", () => {
-  test.each(["codex", "agy"] as const)("%s mock writes a countable skeptic verdict", (provider) => {
-    const n = { codex: 141, agy: 143 }[provider];
+  // codex runs through its REAL composed command, with an executable `codex`
+  // script first on PATH standing in for the CLI (a real program, because the
+  // command wraps codex in GNU timeout, which cannot run shell functions). The
+  // brief points codex at the in-worktree drop dir (the only place its Windows
+  // sandbox can write) and the command must move the file to the canonical seat
+  // path that collect counts.
+  const codexSeat = { kind: "cli", provider: "codex" } as const;
+  const dropFromBrief = (dir: string) =>
+    dirname(readFileSync(briefPath(dir), "utf8").split(/\r?\n/).find((line) => line.includes(".z-review-") && line.endsWith("verdict.json"))!);
+  const runCodexCommand = (m: { worktreePath: string; inputPath: string }, dir: string, fakeCodexBody: string, shellPrelude = "") => {
+    const bin = mkdtempSync(join(tmpdir(), "zar-fake-codex-"));
+    writeFileSync(join(bin, "codex"), `#!/usr/bin/env bash\n${fakeCodexBody}\n`, { mode: 0o755 });
+    const b = bin.replace(/\\/g, "/");
+    // Git Bash wants a POSIX path in PATH (C:/x has a ':' that would split it); cygpath exists only there.
+    const pathFix = `PATH="$(cygpath -u "${b}" 2>/dev/null || echo "${b}"):$PATH"`;
+    const prelude = shellPrelude === "" ? "" : `${shellPrelude}; `;
+    const p = Bun.spawnSync(["bash", "-c", `${pathFix}; ${prelude}${cliCommand(codexSeat, m.worktreePath, dir, m.inputPath, dropFromBrief(dir))}`], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    rmSync(bin, { recursive: true, force: true });
+    return p;
+  };
+
+  test("codex verdict written in the worktree drop dir lands countable in the seat dir", () => {
+    const n = 141;
+    const m = runPrepare(n, {}, { "skeptic-models": `["codex"]` });
+    const dir = join(dirname(m.verdictPath), "skeptic-1");
+    const drop = dropFromBrief(dir);
+    expect(readFileSync(briefPath(dir), "utf8")).toContain(verdictPath(drop));
+    const mock = join(REPO_ROOT_FOR_MOCK, "evals", "reviewer", "mock-provider.sh").replace(/\\/g, "/");
+    const p = runCodexCommand(m, dir, `exec bash "${mock}" codex`);
+    expect(p.exitCode).toBe(0);
+    expect(p.stdout.toString()).toContain("verdict written");
+    const q = quorumFromDisk([join(dir, "verdict.json")], m.runRoot, { runId: m.runId, ticket: n, stage: "reviewer", attempt: 1 });
+    expect(q).toMatchObject({ received: 1, unrefuted: 1, invalid: [] });
+    expect(existsSync(drop)).toBe(false);
+    cleanup(repo, m.worktreePath);
+  });
+
+  test("a stray file left beside the verdict does not keep the drop dir alive", () => {
+    const m = runPrepare(153, {}, { "skeptic-models": `["codex"]` });
+    const dir = join(dirname(m.verdictPath), "skeptic-1");
+    const drop = dropFromBrief(dir);
+    const d = drop.replace(/\\/g, "/");
+    // A cut-off mid-write leaves the atomic-write temp file next to the last complete verdict.
+    const p = runCodexCommand(m, dir, `cat >/dev/null; printf '{}' > "${d}/verdict.json"; printf 'partial' > "${d}/verdict.json.tmp"; exit 0`);
+    expect(p.exitCode).toBe(0);
+    expect(existsSync(join(dir, "verdict.json"))).toBe(true);
+    expect(existsSync(drop)).toBe(false);
+    cleanup(repo, m.worktreePath);
+  });
+
+  test("an existing codex drop dir aborts before launch and keeps its stale verdict", () => {
+    const m = runPrepare(149, {}, { "skeptic-models": `["codex"]` });
+    const dir = join(dirname(m.verdictPath), "skeptic-1");
+    const drop = dropFromBrief(dir);
+    const launched = join(root, "codex-launched");
+    mkdirSync(drop, { recursive: true });
+    writeFileSync(verdictPath(drop), "stale");
+    const p = runCodexCommand(m, dir, `touch "${launched.replace(/\\/g, "/")}"; exit 0`);
+    expect(p.exitCode).not.toBe(0);
+    expect(existsSync(launched)).toBe(false);
+    expect(readFileSync(verdictPath(drop), "utf8")).toBe("stale");
+    expect(existsSync(join(dir, "verdict.json"))).toBe(false);
+    cleanup(repo, m.worktreePath);
+  });
+
+  test("a vanished worktree aborts before codex launches and is not re-created", () => {
+    const m = runPrepare(150, {}, { "skeptic-models": `["codex"]` });
+    const dir = join(dirname(m.verdictPath), "skeptic-1");
+    const launched = join(root, "codex-launched-150");
+    cleanup(repo, m.worktreePath);
+    const p = runCodexCommand(m, dir, `touch "${launched.replace(/\\/g, "/")}"; exit 0`);
+    expect(p.exitCode).not.toBe(0);
+    expect(existsSync(launched)).toBe(false);
+    expect(existsSync(m.worktreePath)).toBe(false);
+  });
+
+  test("a codex run that dies keeps its exit status and leaves no verdict to count", () => {
+    const n = 142;
+    const m = runPrepare(n, {}, { "skeptic-models": `["codex"]` });
+    const dir = join(dirname(m.verdictPath), "skeptic-1");
+    const p = runCodexCommand(m, dir, "cat >/dev/null; exit 3");
+    expect(p.exitCode).toBe(3);
+    const q = quorumFromDisk([join(dir, "verdict.json")], m.runRoot, { runId: m.runId, ticket: n, stage: "reviewer", attempt: 1 });
+    expect(q.received).toBe(0);
+    cleanup(repo, m.worktreePath);
+  });
+
+  test("a successful codex run without a verdict fails", () => {
+    const m = runPrepare(145, {}, { "skeptic-models": `["codex"]` });
+    const dir = join(dirname(m.verdictPath), "skeptic-1");
+    expect(runCodexCommand(m, dir, "cat >/dev/null; exit 0").exitCode).toBe(1);
+    cleanup(repo, m.worktreePath);
+  });
+
+  test("a successful codex run fails when its verdict cannot be moved", () => {
+    const m = runPrepare(146, {}, { "skeptic-models": `["codex"]` });
+    const dir = join(dirname(m.verdictPath), "skeptic-1");
+    const target = verdictPath(dropFromBrief(dir)).replace(/\\/g, "/");
+    const body = `cat >/dev/null; printf '{}' > "${target}"; exit 0`;
+    expect(runCodexCommand(m, dir, body, "mv() { return 9; }").exitCode).toBe(9);
+    cleanup(repo, m.worktreePath);
+  });
+
+  test("a codex run cut off after its provisional verdict still counts, with timeout's 124", () => {
+    const n = 144;
+    const m = runPrepare(n, {}, { "skeptic-models": `["codex"]` });
+    const dir = join(dirname(m.verdictPath), "skeptic-1");
+    const brief = readFileSync(briefPath(dir), "utf8");
+    expect(brief).toContain("Cut-off rule (this seat is stopped after 570s");
+    expect(brief).toContain('write the COMPLETE verdict file with result "CONFUSED"');
+    const provisional = JSON.stringify({
+      schema: VERDICT_SCHEMA_VERSION, runId: m.runId, ticket: n, stage: "skeptic", attempt: 1, result: "UPHELD",
+      evidence: { lens: "refutation", claimChecked: "first read" }, notes: "PROVISIONAL: read the diff, tests not run yet",
+    });
+    const target = verdictPath(dropFromBrief(dir)).replace(/\\/g, "/");
+    // Writes the provisional file, then is "stopped" the way GNU timeout reports a cut-off.
+    const p = runCodexCommand(m, dir, `cat >/dev/null; printf '%s\\n' '${provisional}' > "${target}"; exit 124`);
+    expect(p.exitCode).toBe(124);
+    const q = quorumFromDisk([join(dir, "verdict.json")], m.runRoot, { runId: m.runId, ticket: n, stage: "reviewer", attempt: 1 });
+    expect(q).toMatchObject({ received: 1, unrefuted: 0, invalid: [] });
+    expect(JSON.parse(readFileSync(join(dir, "verdict.json"), "utf8")).notes).toStartWith("PROVISIONAL: ");
+    cleanup(repo, m.worktreePath);
+  });
+
+  // macOS: no GNU timeout. `command` is shadowed so the lookup misses it, as it would there.
+  const hide = (names: string) => `command() { case "$2" in ${names}) return 1;; esac; builtin command "$@"; }`;
+
+  test("without timeout or gtimeout, the watchdog cuts codex off, reports 124, and the provisional verdict still counts", () => {
+    const n = 147;
+    const m = runPrepare(n, {}, { "skeptic-models": `["codex"]` });
+    const dir = join(dirname(m.verdictPath), "skeptic-1");
+    const target = verdictPath(dropFromBrief(dir)).replace(/\\/g, "/");
+    const provisional = JSON.stringify({
+      schema: VERDICT_SCHEMA_VERSION, runId: m.runId, ticket: n, stage: "skeptic", attempt: 1, result: "UPHELD",
+      evidence: { lens: "refutation", claimChecked: "first read" }, notes: "PROVISIONAL: tests not run yet",
+    });
+    // 1s watchdog sleeps instead of 570s/10s; codex hangs well past them in a CHILD process,
+    // as a real codex's tool calls do, and both IGNORE TERM, so only the KILL follow-up
+    // stops them. The child must die with codex (the whole process group), or it outlives
+    // the command holding the Bash tool's output pipe.
+    const childPid = join(root, "codex-child.pid").replace(/\\/g, "/");
+    const prelude = `${hide("timeout|gtimeout")}; sleep() { builtin command sleep 1; }`;
+    const body = `trap '' TERM; cat >/dev/null; printf '%s\\n' '${provisional}' > "${target}"; sleep 30 & echo $! > "${childPid}"; wait`;
+    const p = runCodexCommand(m, dir, body, prelude);
+    expect(p.exitCode).toBe(124);
+    const alive = Bun.spawnSync(["bash", "-c", `pid=$(cat "${childPid}"); kill -0 "$pid" 2>/dev/null && { kill "$pid"; echo alive; }`]);
+    expect(alive.stdout.toString()).not.toContain("alive");
+    const q = quorumFromDisk([join(dir, "verdict.json")], m.runRoot, { runId: m.runId, ticket: n, stage: "reviewer", attempt: 1 });
+    expect(q).toMatchObject({ received: 1, unrefuted: 0, invalid: [] });
+    cleanup(repo, m.worktreePath);
+  });
+
+  test("without timeout, gtimeout wraps codex", () => {
+    const m = runPrepare(148, {}, { "skeptic-models": `["codex"]` });
+    const dir = join(dirname(m.verdictPath), "skeptic-1");
+    const prelude = `${hide("timeout")}; gtimeout() { echo GTIMEOUT >&2; builtin command timeout "$@"; }`;
+    const p = runCodexCommand(m, dir, "cat >/dev/null; exit 3", prelude);
+    expect(p.exitCode).toBe(3);
+    expect(p.stderr.toString()).toContain("GTIMEOUT");
+    cleanup(repo, m.worktreePath);
+  });
+
+  test.each([
+    [151, "watchdog", `${hide("timeout|gtimeout")}; sleep() { builtin command sleep 1; }`],
+    [152, "timeout", `timeout() { shift 3; exec "$(type -P timeout)" -k 5s 1s "$@"; }`],
+  ] as const)("%i %s path: a TERM-ignoring child dies with the group after codex exits", (n, _path, prelude) => {
+    const m = runPrepare(n, {}, { "skeptic-models": `["codex"]` });
+    const dir = join(dirname(m.verdictPath), "skeptic-1");
+    const childPid = join(root, `codex-child-${n}.pid`).replace(/\\/g, "/");
+    const body = `cat >/dev/null; ( trap '' TERM; exec sleep 30 ) & echo $! > "${childPid}"; wait`;
+    const p = runCodexCommand(m, dir, body, prelude);
+    expect(p.exitCode).toBe(124);
+    const alive = Bun.spawnSync(["bash", "-c", `pid=$(cat "${childPid}"); kill -0 "$pid" 2>/dev/null && { kill -KILL "$pid"; echo alive; }`]);
+    expect(alive.stdout.toString()).not.toContain("alive");
+    cleanup(repo, m.worktreePath);
+  });
+
+  test.each(["agy"] as const)("%s mock writes a countable skeptic verdict", (provider) => {
+    const n = { agy: 143 }[provider];
     const m = runPrepare(n, {}, { "skeptic-models": `["${provider}"]` });
     const dir = join(dirname(m.verdictPath), "skeptic-1");
     const brief = readFileSync(briefPath(dir), "utf8");
@@ -490,14 +670,14 @@ describe("collect", () => {
     writeVerdict(s1, m, 120, "skeptic", "UPHELD", { lens: "refutation", claimChecked: "x" });
     writeVerdict(s2, m, 120, "skeptic", "REFUTED", { lens: "refutation", claimChecked: "y" });
     writeVerdict(m.verdictPath, m, 120, "reviewer", "REVIEW-APPROVE", {
-      confidence: 33,
+      confidence: 50,
       skepticVerdictPaths: [s1, s2, missing], // reviewer lists a file that never landed
     });
 
     const r = collect(m.verdictPath, m.runRoot, m.runId, 120, m.adversarial);
     if (!r.ok) throw new Error(r.reason);
     expect(r.result).toBe("REVIEW-APPROVE");
-    expect(r.confidence).toBe(33);
+    expect(r.confidence).toBe(50);
     expect(r.quorum).toMatchObject({ received: 2, of: 3, unrefuted: 1 });
     expect(r.quorum!.invalid).toHaveLength(1); // the missing third file, named
     cleanup(repo, m.worktreePath);
@@ -532,6 +712,39 @@ describe("collect", () => {
     const r = collect(m.verdictPath, m.runRoot, m.runId, 124, m.adversarial);
     if (!r.ok) throw new Error(r.reason);
     expect(r.quorum).toMatchObject({ received: 3, of: 3, unrefuted: 2, invalid: [] });
+    expect(r.confidence).toBe(67);
+    cleanup(repo, m.worktreePath);
+  });
+
+  test("provisional UPHELD does not increase collected confidence", () => {
+    const m = runPrepare(125);
+    const reviewerDir = dirname(m.verdictPath);
+    writeVerdict(
+      join(reviewerDir, "skeptic-1", "verdict.json"),
+      m,
+      125,
+      "skeptic",
+      "UPHELD",
+      { lens: "refutation", claimChecked: "first read" },
+      "PROVISIONAL: tests not run"
+    );
+    writeVerdict(m.verdictPath, m, 125, "reviewer", "REVIEW-APPROVE", { confidence: 100 });
+
+    const r = collect(m.verdictPath, m.runRoot, m.runId, 125, m.adversarial);
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.quorum).toMatchObject({ received: 1, unrefuted: 0 });
+    expect(r.confidence).toBe(0);
+    cleanup(repo, m.worktreePath);
+  });
+
+  test("adversarial run with zero skeptic verdicts caps the reviewer's own 100 at 99", () => {
+    const m = runPrepare(126);
+    expect(m.adversarial).toBe(true);
+    writeVerdict(m.verdictPath, m, 126, "reviewer", "REVIEW-APPROVE", { confidence: 100 });
+    const r = collect(m.verdictPath, m.runRoot, m.runId, 126, m.adversarial);
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.quorum).toMatchObject({ received: 0, of: 3 });
+    expect(r.confidence).toBe(99);
     cleanup(repo, m.worktreePath);
   });
 

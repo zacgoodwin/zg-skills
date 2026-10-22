@@ -27,12 +27,14 @@ import { handleCliError, parseFlags, readJson, requireFlag, str, ZError } from "
 import {
   briefPath,
   cliProvidersIn,
+  codexDropDir,
   parseReviewerSeat,
   preflightProviders,
   readSkepticPreference,
   realDeps,
   resolveSkepticSeats,
   seatToken,
+  seatVerdictDir,
   type ProviderDeps,
   type Seat,
 } from "./models.ts";
@@ -366,6 +368,9 @@ export function prepare(
   const runRoot = join(outDir, "runs", runId);
   const reviewerDir = stageDest(outDir, runId, pr.number, "reviewer", STANDALONE_ATTEMPT);
   const skepticDirs = [1, 2, 3].map((k) => join(reviewerDir, `skeptic-${k}`));
+  const skepticVerdictDirs = skepticSeats.map((seat, idx) =>
+    seat.kind === "cli" && seat.provider === "codex" ? codexDropDir(input.worktreePath) : skepticDirs[idx]
+  );
   mkdirSync(reviewerDir, { recursive: true });
   for (const d of skepticDirs) mkdirSync(d, { recursive: true });
   const target: VerdictTarget = {
@@ -374,6 +379,7 @@ export function prepare(
     ticket: pr.number,
     attempt: STANDALONE_ATTEMPT,
     skepticDirs,
+    skepticVerdictDirs,
   };
 
   // The constructor decides the fan-out: mode + the diff's own changed-line
@@ -390,12 +396,15 @@ export function prepare(
       const k = idx + 1;
       writeFileSync(
         briefPath(skepticDirs[idx]),
-        skepticBrief(k, input, inputPath, skepticDirs[idx], {
-          runId,
-          ticket: pr.number,
-          stage: "skeptic",
-          attempt: STANDALONE_ATTEMPT,
-        })
+        skepticBrief(
+          k,
+          input,
+          inputPath,
+          skepticDirs[idx],
+          { runId, ticket: pr.number, stage: "skeptic", attempt: STANDALONE_ATTEMPT },
+          seatVerdictDir(seat, skepticDirs[idx], skepticVerdictDirs[idx]),
+          true // only CLI seats get a brief file
+        )
       );
     });
   }
@@ -467,12 +476,23 @@ export function collect(
   // field) is what the caller passes; it is never inferred from the verdict.
   const reviewerDir = join(runRoot, `t${ticket}`, `reviewer-${STANDALONE_ATTEMPT}`);
   const skepticPaths = [1, 2, 3].map((k) => verdictPath(join(reviewerDir, `skeptic-${k}`)));
+  const quorum = adversarial ? quorumFromDisk(skepticPaths, runRoot, expect) : null;
+  const own = typeof conf === "number" && conf >= 0 && conf <= 100 ? conf : null;
+  // Adversarial with k >= 1 verdicts on disk: confidence is COMPUTED from the
+  // off-disk quorum (unrefuted / received, which reproduces the prompt's lookup
+  // table row for row), whatever the result, and the reviewer's own number is
+  // ignored -- it can misread the table or count a provisional UPHELD.
+  // k=0 on an adversarial run: nobody looked, so the reviewer's own number stands but
+  // never 100 (that claims three independent agreements that never happened).
+  const confidence = quorum && quorum.received > 0
+    ? Math.round((quorum.unrefuted / quorum.received) * 100)
+    : quorum && own !== null ? Math.min(own, 99) : own;
   return {
     ok: true,
     result: v.result,
     notes: v.notes ?? "",
-    confidence: typeof conf === "number" && conf >= 0 && conf <= 100 ? conf : null,
-    quorum: adversarial ? quorumFromDisk(skepticPaths, runRoot, expect) : null,
+    confidence,
+    quorum,
   };
 }
 

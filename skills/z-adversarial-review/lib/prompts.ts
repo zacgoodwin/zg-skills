@@ -15,7 +15,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { handleCliError, parseFlags, readJsonFile, str, ZError } from "./cli.ts";
-import { INHERIT_SEAT, SKEPTIC_SEAT_COUNT, allInherit, briefPath, cliCommand, type Seat } from "./models.ts";
+import { CLI_CUTOFF, INHERIT_SEAT, SKEPTIC_SEAT_COUNT, allInherit, briefPath, cliCommand, seatVerdictDir, type Seat } from "./models.ts";
 import { verdictInstructions, verdictPath, type ExpectedSpawn } from "./verdict.ts";
 
 // -- adversarial mode ----------------------------------------------------------
@@ -37,6 +37,7 @@ export interface VerdictTarget {
   ticket: number;
   attempt: number;
   skepticDirs?: string[];
+  skepticVerdictDirs?: string[];
 }
 
 function spawnFor(t: VerdictTarget, stage: "reviewer" | "skeptic"): ExpectedSpawn {
@@ -155,14 +156,39 @@ Every command you verify with -- the test suite, typecheck, build, anything you 
 // carries its own verdict-file contract, so a skeptic's report is a file the
 // HARNESS counts -- the reviewer summarizing "3/3 agreed" has no effect on the
 // quorum the report reads.
-export function skepticBrief(k: number, input: ReviewerPromptInput, inputPath: string, dir: string, spawn: ExpectedSpawn): string {
+// A CLI seat is killed at CLI_CUTOFF with no warning, and the verdict file is a
+// skeptic's LAST act -- so a long review (agy routinely ran 6-10 minutes on a
+// 21k-line diff) used to leave nothing at all. This rule makes a cut-off leave
+// an honest provisional verdict instead. Agent seats have no cut-off and keep
+// their brief byte-identical.
+export const CLI_CUTOFF_RULE = `## Cut-off rule (this seat is stopped after ${CLI_CUTOFF}, about 9.5 minutes, without warning)
+A run stopped before its verdict file exists counts as nothing, and the file is normally your last act. So write it EARLY and keep it current:
+1. Within your first 4 minutes, as soon as you have a first read of the diff, write the COMPLETE verdict file with result "CONFUSED", and start "notes" with "PROVISIONAL: " followed by what you have checked so far and what you have not. A provisional non-refutation must never use "UPHELD".
+2. Keep attacking. Whenever your judgment changes (a refutation found, a suspicion cleared), OVERWRITE the whole file -- always complete, valid JSON, never a partial write.
+3. When you are done, overwrite it one last time with "notes" no longer starting "PROVISIONAL: ", then make your final message.
+Every write, first or last, goes to verdict.json.tmp in the same directory and is then renamed over verdict.json (mv); never write verdict.json in place. A cut-off mid-write then leaves the previous complete file, not broken JSON.
+A provisional verdict is "CONFUSED" because the review is incomplete; the notes must say exactly what it covers.`;
+
+// `verdictDir` is where this seat writes its verdict: the seat dir itself,
+// except a codex seat, whose sandbox can only write inside the worktree
+// (models.ts seatVerdictDir); its command moves the file to `dir` afterwards.
+// `cliSeat` adds CLI_CUTOFF_RULE.
+export function skepticBrief(
+  k: number,
+  input: ReviewerPromptInput,
+  inputPath: string,
+  dir: string,
+  spawn: ExpectedSpawn,
+  verdictDir: string = dir,
+  cliSeat = false
+): string {
   return `You are SKEPTIC ${k} of 3, a fresh context inside a blinded adversarial code review, blinded exactly as your reviewer is: your ONLY inputs are the ticket body, the acceptance criteria, and the diff, read from ${inputPath} (fields \`ticketBody\`, \`acceptanceCriteria\`, \`diff\`), plus the throwaway worktree at ${input.worktreePath} (yours to execute; nothing you do in it lands anywhere). No other skeptic's verdict reaches you and yours reaches no one but the harness.
 
 Your task is to REFUTE that the diff satisfies the acceptance criteria: find the one criterion it violates, the edge it breaks, a test that passes without the change. Concrete evidence only -- file:line, a command you ran, an input that misbehaves.
 
-${verdictInstructions("skeptic", verdictPath(dir), spawn)}
+${verdictInstructions("skeptic", verdictPath(verdictDir), spawn)}
 
-Result meanings: "REFUTED" = you found concrete evidence the diff fails a criterion -- name it in notes with file:line and the failing input. "UPHELD" = you genuinely tried and could not refute it; notes says what you attacked. "CONFUSED" = the inputs are unusable. Put your lens ("refutation") and the one claim you checked hardest in evidence.`;
+Result meanings: "REFUTED" = you found concrete evidence the diff fails a criterion -- name it in notes with file:line and the failing input. "UPHELD" = you genuinely tried and could not refute it; notes says what you attacked. "CONFUSED" = the inputs are unusable. Put your lens ("refutation") and the one claim you checked hardest in evidence.${cliSeat ? `\n\n${CLI_CUTOFF_RULE}` : ""}`;
 }
 
 // -- reviewer prompt -----------------------------------------------------------
@@ -189,7 +215,7 @@ Result meanings: "REFUTED" = you found concrete evidence the diff fails a criter
 // and a brief never tells a skeptic what model it is.
 const SKEPTIC_SHARED_TAIL = `You therefore never wait for a skeptic, and you never re-count for one either: each skeptic reports by WRITING ITS OWN VERDICT FILE, and the harness counts those files itself -- a skeptic that lands after you return still counts, and a tally you write cannot vouch for a file that is not there. Once your three tool calls return, read whichever skeptic verdict files exist, weigh any refutation's evidence in your own judgment, and write YOUR verdict. Do not spawn replacements, do not re-ping, and do not end your turn to "wait", "check back", or "await completion notifications" -- those are not slower routes to a verdict, they are how your review gets thrown away.
 
-In your verdict file's evidence, set "skepticVerdictPaths" to the paths of ONLY the skeptic verdict files that exist when you look (0-3 of them; list none that you cannot read). Set "confidence" off this table over the k verdicts you actually hold -- do no arithmetic:
+In your verdict file's evidence, set "skepticVerdictPaths" to the paths of ONLY the skeptic verdict files that exist when you look (0-3 of them; list none that you cannot read). Set "confidence" off this table over the k verdicts you actually hold, counting only non-provisional UPHELD verdicts as UPHELD -- do no arithmetic:
 - k=3: 3 UPHELD -> 100, 2 -> 67, 1 -> 33, 0 -> 0
 - k=2: 2 UPHELD -> 100, 1 -> 50, 0 -> 0
 - k=1: 1 UPHELD -> 100, 0 -> 0
@@ -200,12 +226,12 @@ function heredocBrief(k: number, brief: string): string {
   return `<<<SKEPTIC-${k}-BRIEF\n${brief}\nSKEPTIC-${k}-BRIEF`;
 }
 
-function seatSection(k: number, seat: Seat, brief: string, input: ReviewerPromptInput, dir: string, inputPath: string): string {
+function seatSection(k: number, seat: Seat, brief: string, input: ReviewerPromptInput, dir: string, inputPath: string, verdictDir: string): string {
   if (seat.kind === "agent") {
     const modelClause = seat.model === "inherit" ? "" : `, \`model: "${seat.model}"\``;
     return `### Skeptic ${k} -- Agent seat: one Agent tool call${modelClause}, \`run_in_background: false\`, prompt = the brief below VERBATIM (edit nothing)\n\n${heredocBrief(k, brief)}`;
   }
-  const command = cliCommand(seat, input.worktreePath, dir, inputPath);
+  const command = cliCommand(seat, input.worktreePath, dir, inputPath, verdictDir);
   return `### Skeptic ${k} -- CLI seat (${seat.provider}): run this EXACT command with the Bash tool, in the FOREGROUND (edit nothing), with the Bash tool's \`timeout\` parameter set to 600000 -- the tool's DEFAULT 2-minute timeout would kill this CLI mid-review
 
 \`\`\`bash
@@ -232,6 +258,7 @@ export function reviewerPrompt(
     );
   }
   const seats = skepticSeats ?? Array(SKEPTIC_SEAT_COUNT).fill(INHERIT_SEAT);
+  const skepticVerdictDirs = verdict.skepticVerdictDirs ?? skepticDirs;
   if (adversarial && seats.length !== SKEPTIC_SEAT_COUNT) {
     throw new ZError(
       `An adversarial reviewer prompt needs exactly ${SKEPTIC_SEAT_COUNT} resolved skeptic seats, got ${seats.length}. resolveSkepticSeats gap-fills short lineups; the caller passes the resolved 3.`
@@ -242,10 +269,18 @@ export function reviewerPrompt(
     ? skepticDirs
         .map((dir, idx) => {
           const k = idx + 1;
-          const brief = skepticBrief(k, input, inputPath, dir, spawnFor(verdict, "skeptic"));
+          const brief = skepticBrief(
+            k,
+            input,
+            inputPath,
+            dir,
+            spawnFor(verdict, "skeptic"),
+            seatVerdictDir(seats[idx], dir, skepticVerdictDirs[idx]),
+            seats[idx].kind === "cli"
+          );
           return legacyLineup
             ? `### Skeptic ${k}'s brief -- pass VERBATIM as one Agent spawn's prompt (edit nothing)\n\n${heredocBrief(k, brief)}`
-            : seatSection(k, seats[idx], brief, input, dir, inputPath);
+            : seatSection(k, seats[idx], brief, input, dir, inputPath, skepticVerdictDirs[idx]);
         })
         .join("\n\n")
     : "";
@@ -268,7 +303,7 @@ This diff's blast radius earned an adversarial review; do NOT trust your single 
 
 COLLECT THEM INSIDE THIS TURN. Launch all three in ONE message: each Agent seat as one Agent tool call carrying \`run_in_background: false\` (plus the \`model\` value its section names, when it names one), each CLI seat as one Bash tool call running its command in the FOREGROUND -- never backgrounded. Launched together they still run concurrently, and every return comes back as a tool result in this same turn. The Agent tool's DEFAULT is a background spawn, whose only delivery channel is a task notification BETWEEN turns -- and you get no next turn, because this harness sends you exactly one message by design. A backgrounded seat is one you will never hear from, however long you wait.
 
-A CLI seat that errors or times out has written no verdict file: that is a real, reportable outcome, and the harness reports a short quorum honestly. Do not retry it, do not spawn a substitute, and NEVER write a verdict file on a dead seat's behalf -- you speak only for yourself.
+After every CLI return, including a timeout or any other nonzero exit, inspect that seat's canonical verdict path. The command moves any provisional verdict there before returning. Use it if it exists; otherwise the seat wrote no verdict and the harness reports a short quorum honestly. Do not retry it, do not spawn a substitute, and NEVER write a verdict file on a dead seat's behalf -- you speak only for yourself.
 
 ${SKEPTIC_SHARED_TAIL}
 
@@ -293,7 +328,7 @@ ${foregroundRule()}
 
 ${verdictInstructions("reviewer", verdict.path, spawnFor(verdict, "reviewer"))}
 
-Result meanings for this stage: "REVIEW-APPROVE" = every criterion verified against the diff, typecheck + touched tests green; evidence.confidence is your certainty every criterion holds, 0-100 (${adversarial ? "read it off the super-truth table above" : "self-assessed on this single pass"}) -- a low score is reported to the human as an approval with an asterisk, never hidden. "REVIEW-FINDINGS" = numbered findings in notes, each with file:line and why it blocks the merge. "NEEDS-HUMAN" = a genuine spec ambiguity a human must settle. "BLOCKED" = the throwaway worktree is unusable -- can't check out or execute the diff at all. "CONFUSED" = the inputs make no sense${adversarial ? `, including a skeptic fan-out so broken you cannot judge the diff at all (name what happened in notes)` : ""}.`;
+Result meanings for this stage: "REVIEW-APPROVE" = every criterion verified against the diff, typecheck + touched tests green; evidence.confidence is your certainty every criterion holds, 0-100 (${adversarial ? "read it off the super-truth table above" : "self-assessed on this single pass"}) -- a low score is reported to the human as an approval with an asterisk, never hidden. "REVIEW-FINDINGS" = numbered findings in notes, each with file:line and why it blocks the merge. "NEEDS-HUMAN" = a genuine spec ambiguity a human must settle. "BLOCKED" = the throwaway worktree is unusable -- can't check out or execute the diff at all. "CONFUSED" = the inputs make no sense${adversarial ? `, including a skeptic fan-out so broken you cannot judge the diff at all (name what happened in notes)` : ""}.${adversarial && legacyLineup ? "\n" : ""}`;
 }
 
 // -- CLI ----------------------------------------------------------------------

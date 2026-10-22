@@ -9,6 +9,7 @@
 // is only to get the right process launched -- composed HERE, in code, and
 // rendered verbatim into the reviewer prompt, never improvised by the model.
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { handleCliError, parseFlags, readJsonFile, str, ZError } from "./cli.ts";
@@ -115,31 +116,80 @@ export function briefPath(skepticDir: string): string {
   return join(skepticDir, "brief.txt");
 }
 
-// One exact command per provider, cwd = the throwaway worktree, verdict dir
-// granted explicitly, run FOREGROUND via the reviewer's Bash tool. The brief
-// is a FILE (prepare writes it) so no prompt text rides the command line
-// except agy's, whose headless mode takes the prompt as an argument.
+/**
+ * Generates a verified-absent drop dir where a codex seat writes its verdict,
+ * INSIDE the throwaway
+ * worktree, the one place codex's workspace-write sandbox can always write.
+ * On Windows codex runs tools as a separate low-privilege account
+ * (CodexSandboxOffline) that has no ACL on the run dir under the user's Temp,
+ * so a `writable_roots` grant there is accepted at startup but every write is
+ * "Access ... is denied" -- the verdict then lands wherever codex improvises
+ * and the quorum never counts it. The composed command moves the file to the
+ * canonical seat path, which is all collect ever reads.
+ */
+export function codexDropDir(worktreePath: string): string {
+  let drop: string;
+  do {
+    drop = join(worktreePath, `.z-review-${randomUUID()}`);
+  } while (existsSync(drop));
+  return drop;
+}
+
+/** The directory a seat's brief names for its verdict file (see codexDropDir). */
+export function seatVerdictDir(seat: Seat, skepticDir: string, codexDrop?: string): string {
+  return seat.kind === "cli" && seat.provider === "codex" ? codexDrop ?? skepticDir : skepticDir;
+}
+
+/**
+ * Every CLI seat is cut off here, just under the reviewer Bash tool's hard 10-minute cap (a
+ * Bash kill would take the whole command down, including codex's verdict move). agy enforces
+ * it with --print-timeout; codex has no such flag, so its command wraps it in GNU timeout when
+ * present. Skeptic reviews of large diffs routinely run 6-10 minutes, which is why CLI briefs
+ * also carry the provisional-verdict rule (prompts.ts CLI_CUTOFF_RULE).
+ */
+// Single-unit form on purpose: GNU timeout rejects "9m30s" (exit 125, codex never runs), while agy's
+// Go-duration --print-timeout accepts "570s" too.
+export const CLI_CUTOFF = "570s";
+
+// One exact command per provider, cwd = the throwaway worktree, run
+// FOREGROUND via the reviewer's Bash tool. The brief is a FILE (prepare writes
+// it) so no prompt text rides the command line except agy's, whose headless
+// mode takes the prompt as an argument.
 //
 // agy sandboxes READS to its granted directories, and the brief points every
 // skeptic at the blinded input file -- so agy is granted the input file's
-// directory as well as its own verdict dir. codex's workspace-write sandbox
-// restricts only writes, so its grant stays the verdict dir alone.
+// directory as well as its own verdict dir. codex writes its verdict into its
+// in-worktree drop dir (codexDropDir); the command then moves it to the seat
+// dir outside the sandbox -- also after a cut-off, so a provisional verdict
+// still counts -- and keeps codex's own exit status (124 on a cut-off).
 export function cliCommand(
   seat: Seat & { kind: "cli" },
   worktreePath: string,
   skepticDir: string,
-  inputPath: string
+  inputPath: string,
+  verdictDir: string = skepticDir
 ): string {
   const wt = shPath(worktreePath);
   const dir = shPath(skepticDir);
   const inputDir = shPath(dirname(inputPath));
   const brief = `${dir}/brief.txt`;
   switch (seat.provider) {
-    case "codex":
-      return `codex exec -s workspace-write --cd "${wt}" -c 'sandbox_workspace_write.writable_roots=["${dir}"]'${seat.model ? ` -m ${seat.model}` : ""} --skip-git-repo-check - < "${brief}"`;
+    case "codex": {
+      const drop = shPath(verdictDir);
+      // The cut-off must fire INSIDE the command, before the Bash tool's 600s cap, or the mv
+      // never runs. GNU timeout, else gtimeout (Homebrew on macOS), else a bash watchdog.
+      // Both send TERM, then KILL 10s later for anything that ignores it; a kill (143/137)
+      // is reported as timeout's 124. set -m starts the job (timeout or codex) in its own
+      // process group, and once it returns the whole group gets KILL: a child that ignored
+      // TERM after codex itself exited would otherwise outlive the command holding the
+      // tool's pipe. Plain mkdir (no -p): a vanished worktree must abort, not be re-created empty.
+      // rm -rf, not rmdir: the drop dir is this seat's own unique path, and a cut-off
+      // can leave a verdict.json.tmp in it that rmdir would silently keep.
+      const secs = parseInt(CLI_CUTOFF, 10);
+      return `mkdir "${drop}" || exit $?; set -- codex exec -s workspace-write --cd "${wt}"${seat.model ? ` -m ${seat.model}` : ""} --skip-git-repo-check -; TO=$(command -v timeout || command -v gtimeout); set -m; if [ -n "$TO" ]; then "$TO" -k 10s ${CLI_CUTOFF} "$@" < "${brief}" & else "$@" < "${brief}" & fi; pid=$!; set +m; dog=; if [ -z "$TO" ]; then ( trap 'kill $! 2>/dev/null; exit' TERM; sleep ${secs} & wait; trap '' TERM; kill -TERM -- -$pid 2>/dev/null; sleep 10 & wait; kill -KILL -- -$pid 2>/dev/null ) >/dev/null 2>&1 & dog=$!; fi; wait $pid; rc=$?; if [ -n "$dog" ]; then kill $dog 2>/dev/null; wait $dog 2>/dev/null; fi; kill -KILL -- -$pid 2>/dev/null; case $rc in 137|143) rc=124;; esac; move_rc=0; if [ -f "${drop}/verdict.json" ]; then mv -f "${drop}/verdict.json" "${dir}/verdict.json" || move_rc=$?; else move_rc=1; fi; rm -rf "${drop}"; if [ "$rc" -ne 0 ]; then exit "$rc"; fi; exit "$move_rc"`;
+    }
     case "agy":
-      // --print-timeout raised from agy's 5m default to fit the Bash tool's 10-min cap.
-      return `cd "${wt}" && agy -p "$(cat "${brief}")" --add-dir "${dir}" --add-dir "${inputDir}" --dangerously-skip-permissions --print-timeout 9m30s${seat.model ? ` --model ${seat.model}` : ""}`;
+      return `cd "${wt}" && agy -p "$(cat "${brief}")" --add-dir "${dir}" --add-dir "${inputDir}" --dangerously-skip-permissions --print-timeout ${CLI_CUTOFF}${seat.model ? ` --model ${seat.model}` : ""}`;
   }
 }
 

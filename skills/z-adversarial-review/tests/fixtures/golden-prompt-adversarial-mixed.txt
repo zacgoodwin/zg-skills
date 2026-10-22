@@ -18,11 +18,11 @@ This diff's blast radius earned an adversarial review; do NOT trust your single 
 
 COLLECT THEM INSIDE THIS TURN. Launch all three in ONE message: each Agent seat as one Agent tool call carrying `run_in_background: false` (plus the `model` value its section names, when it names one), each CLI seat as one Bash tool call running its command in the FOREGROUND -- never backgrounded. Launched together they still run concurrently, and every return comes back as a tool result in this same turn. The Agent tool's DEFAULT is a background spawn, whose only delivery channel is a task notification BETWEEN turns -- and you get no next turn, because this harness sends you exactly one message by design. A backgrounded seat is one you will never hear from, however long you wait.
 
-A CLI seat that errors or times out has written no verdict file: that is a real, reportable outcome, and the harness reports a short quorum honestly. Do not retry it, do not spawn a substitute, and NEVER write a verdict file on a dead seat's behalf -- you speak only for yourself.
+After every CLI return, including a timeout or any other nonzero exit, inspect that seat's canonical verdict path. The command moves any provisional verdict there before returning. Use it if it exists; otherwise the seat wrote no verdict and the harness reports a short quorum honestly. Do not retry it, do not spawn a substitute, and NEVER write a verdict file on a dead seat's behalf -- you speak only for yourself.
 
 You therefore never wait for a skeptic, and you never re-count for one either: each skeptic reports by WRITING ITS OWN VERDICT FILE, and the harness counts those files itself -- a skeptic that lands after you return still counts, and a tally you write cannot vouch for a file that is not there. Once your three tool calls return, read whichever skeptic verdict files exist, weigh any refutation's evidence in your own judgment, and write YOUR verdict. Do not spawn replacements, do not re-ping, and do not end your turn to "wait", "check back", or "await completion notifications" -- those are not slower routes to a verdict, they are how your review gets thrown away.
 
-In your verdict file's evidence, set "skepticVerdictPaths" to the paths of ONLY the skeptic verdict files that exist when you look (0-3 of them; list none that you cannot read). Set "confidence" off this table over the k verdicts you actually hold -- do no arithmetic:
+In your verdict file's evidence, set "skepticVerdictPaths" to the paths of ONLY the skeptic verdict files that exist when you look (0-3 of them; list none that you cannot read). Set "confidence" off this table over the k verdicts you actually hold, counting only non-provisional UPHELD verdicts as UPHELD -- do no arithmetic:
 - k=3: 3 UPHELD -> 100, 2 -> 67, 1 -> 33, 0 -> 0
 - k=2: 2 UPHELD -> 100, 1 -> 50, 0 -> 0
 - k=1: 1 UPHELD -> 100, 0 -> 0
@@ -32,7 +32,7 @@ A criterion any skeptic REFUTED with concrete evidence is a finding, not a vote 
 ### Skeptic 1 -- CLI seat (codex): run this EXACT command with the Bash tool, in the FOREGROUND (edit nothing), with the Bash tool's `timeout` parameter set to 600000 -- the tool's DEFAULT 2-minute timeout would kill this CLI mid-review
 
 ```bash
-codex exec -s workspace-write --cd "/tmp/wt" -c 'sandbox_workspace_write.writable_roots=["/tmp/sk1"]' --skip-git-repo-check - < "/tmp/sk1/brief.txt"
+mkdir "/tmp/wt/.z-review-test-sk1" || exit $?; set -- codex exec -s workspace-write --cd "/tmp/wt" --skip-git-repo-check -; TO=$(command -v timeout || command -v gtimeout); set -m; if [ -n "$TO" ]; then "$TO" -k 10s 570s "$@" < "/tmp/sk1/brief.txt" & else "$@" < "/tmp/sk1/brief.txt" & fi; pid=$!; set +m; dog=; if [ -z "$TO" ]; then ( trap 'kill $! 2>/dev/null; exit' TERM; sleep 570 & wait; trap '' TERM; kill -TERM -- -$pid 2>/dev/null; sleep 10 & wait; kill -KILL -- -$pid 2>/dev/null ) >/dev/null 2>&1 & dog=$!; fi; wait $pid; rc=$?; if [ -n "$dog" ]; then kill $dog 2>/dev/null; wait $dog 2>/dev/null; fi; kill -KILL -- -$pid 2>/dev/null; case $rc in 137|143) rc=124;; esac; move_rc=0; if [ -f "/tmp/wt/.z-review-test-sk1/verdict.json" ]; then mv -f "/tmp/wt/.z-review-test-sk1/verdict.json" "/tmp/sk1/verdict.json" || move_rc=$?; else move_rc=1; fi; rm -rf "/tmp/wt/.z-review-test-sk1"; if [ "$rc" -ne 0 ]; then exit "$rc"; fi; exit "$move_rc"
 ```
 
 The command itself feeds this seat's brief -- already on disk at /tmp/sk1/brief.txt -- to the CLI. The brief is reproduced below for the record only; the command reads the FILE, so paste nothing:
@@ -45,7 +45,7 @@ Your task is to REFUTE that the diff satisfies the acceptance criteria: find the
 ## Exit contract -- write ONE file, then end with one line (machine-read)
 Your verdict is a FILE, not prose. Before your final message, write EXACTLY this file:
 
-/tmp/sk1/verdict.json
+/tmp/wt/.z-review-test-sk1/verdict.json
 
 with EXACTLY this JSON shape (fill every value; a verdict still carrying a <placeholder> is invalid):
 
@@ -69,12 +69,20 @@ There is no path out of this stage that ends without this file: finished, failed
 verdict written
 
 Result meanings: "REFUTED" = you found concrete evidence the diff fails a criterion -- name it in notes with file:line and the failing input. "UPHELD" = you genuinely tried and could not refute it; notes says what you attacked. "CONFUSED" = the inputs are unusable. Put your lens ("refutation") and the one claim you checked hardest in evidence.
+
+## Cut-off rule (this seat is stopped after 570s, about 9.5 minutes, without warning)
+A run stopped before its verdict file exists counts as nothing, and the file is normally your last act. So write it EARLY and keep it current:
+1. Within your first 4 minutes, as soon as you have a first read of the diff, write the COMPLETE verdict file with result "CONFUSED", and start "notes" with "PROVISIONAL: " followed by what you have checked so far and what you have not. A provisional non-refutation must never use "UPHELD".
+2. Keep attacking. Whenever your judgment changes (a refutation found, a suspicion cleared), OVERWRITE the whole file -- always complete, valid JSON, never a partial write.
+3. When you are done, overwrite it one last time with "notes" no longer starting "PROVISIONAL: ", then make your final message.
+Every write, first or last, goes to verdict.json.tmp in the same directory and is then renamed over verdict.json (mv); never write verdict.json in place. A cut-off mid-write then leaves the previous complete file, not broken JSON.
+A provisional verdict is "CONFUSED" because the review is incomplete; the notes must say exactly what it covers.
 SKEPTIC-1-BRIEF
 
 ### Skeptic 2 -- CLI seat (agy): run this EXACT command with the Bash tool, in the FOREGROUND (edit nothing), with the Bash tool's `timeout` parameter set to 600000 -- the tool's DEFAULT 2-minute timeout would kill this CLI mid-review
 
 ```bash
-cd "/tmp/wt" && agy -p "$(cat "/tmp/sk2/brief.txt")" --add-dir "/tmp/sk2" --add-dir "/tmp" --dangerously-skip-permissions --print-timeout 9m30s --model gemini-3-pro
+cd "/tmp/wt" && agy -p "$(cat "/tmp/sk2/brief.txt")" --add-dir "/tmp/sk2" --add-dir "/tmp" --dangerously-skip-permissions --print-timeout 570s --model gemini-3-pro
 ```
 
 The command itself feeds this seat's brief -- already on disk at /tmp/sk2/brief.txt -- to the CLI. The brief is reproduced below for the record only; the command reads the FILE, so paste nothing:
@@ -111,6 +119,14 @@ There is no path out of this stage that ends without this file: finished, failed
 verdict written
 
 Result meanings: "REFUTED" = you found concrete evidence the diff fails a criterion -- name it in notes with file:line and the failing input. "UPHELD" = you genuinely tried and could not refute it; notes says what you attacked. "CONFUSED" = the inputs are unusable. Put your lens ("refutation") and the one claim you checked hardest in evidence.
+
+## Cut-off rule (this seat is stopped after 570s, about 9.5 minutes, without warning)
+A run stopped before its verdict file exists counts as nothing, and the file is normally your last act. So write it EARLY and keep it current:
+1. Within your first 4 minutes, as soon as you have a first read of the diff, write the COMPLETE verdict file with result "CONFUSED", and start "notes" with "PROVISIONAL: " followed by what you have checked so far and what you have not. A provisional non-refutation must never use "UPHELD".
+2. Keep attacking. Whenever your judgment changes (a refutation found, a suspicion cleared), OVERWRITE the whole file -- always complete, valid JSON, never a partial write.
+3. When you are done, overwrite it one last time with "notes" no longer starting "PROVISIONAL: ", then make your final message.
+Every write, first or last, goes to verdict.json.tmp in the same directory and is then renamed over verdict.json (mv); never write verdict.json in place. A cut-off mid-write then leaves the previous complete file, not broken JSON.
+A provisional verdict is "CONFUSED" because the review is incomplete; the notes must say exactly what it covers.
 SKEPTIC-2-BRIEF
 
 ### Skeptic 3 -- Agent seat: one Agent tool call, `model: "haiku"`, `run_in_background: false`, prompt = the brief below VERBATIM (edit nothing)

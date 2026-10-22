@@ -6,6 +6,49 @@ versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- codex skeptic verdicts now count on Windows. codex runs its tools as a
+  separate sandbox account (`CodexSandboxOffline`) with no ACL on the run
+  directory under the user's Temp, so the old
+  `sandbox_workspace_write.writable_roots` grant was accepted at startup but
+  every verdict write failed with "Access ... is denied". codex then wrote the
+  file wherever it could, and the quorum never counted it. A codex seat's brief
+  now names a drop dir inside the review worktree (`.z-review-<uuid>`, a fresh
+  path verified absent), which the sandbox can always write. The composed
+  command creates it with plain `mkdir` (a vanished worktree aborts before
+  codex starts instead of being re-created empty), moves the verdict to the
+  canonical `skeptic-<k>/verdict.json`, removes the drop dir with `rm -rf`,
+  and keeps codex's exit status; a successful run with no verdict, or a move
+  that fails, exits nonzero. The path-trust rule is unchanged.
+- A CLI skeptic that runs long now still leaves a verdict. agy routinely took
+  6-10 minutes on a large diff against its `--print-timeout` and was cut off
+  with nothing written, because the verdict file is a skeptic's last act. CLI
+  seat briefs now carry a cut-off rule: write a complete verdict within the
+  first 4 minutes with result `CONFUSED` and notes starting `PROVISIONAL: `,
+  overwrite it as the review goes, and finalize it at the end. Every write goes
+  to `verdict.json.tmp` and is renamed over `verdict.json`, so a cut-off
+  mid-write keeps the last complete file. Agent-seat briefs are unchanged.
+- codex, which has no timeout flag, is cut off inside its own command at the
+  same `570s` (GNU `timeout` rejects `9m30s` with exit 125): GNU `timeout`,
+  else `gtimeout` (Homebrew), else a bash watchdog. Both send TERM, then KILL
+  10s later; the job runs in its own process group (`set -m`) and the whole
+  group is killed once it returns, so no child codex spawned outlives the
+  command holding the Bash tool's output pipe. Any cut-off reports exit 124.
+- `readVerdict` rejects a non-string `notes` as INVALID (it used to crash
+  `quorumFromDisk` with a TypeError); `null` notes read as absent.
+
+### Changed
+
+- `collect` computes adversarial confidence instead of trusting the
+  reviewer's: with at least one valid skeptic verdict on disk it is
+  `round(unrefuted / received × 100)` for every result, which reproduces the
+  reviewer's lookup table, and the reviewer's own number is ignored. With no
+  skeptic verdicts, the reviewer's own number stands but is capped at 99.
+- A provisional `UPHELD` (notes starting `PROVISIONAL: `) no longer counts as
+  unrefuted in the quorum, and the reviewer is told to count only
+  non-provisional `UPHELD` verdicts.
+
 ## [1.4.1] - 2026-08-12
 
 ### Fixed

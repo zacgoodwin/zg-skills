@@ -33,6 +33,7 @@ const TARGET: VerdictTarget = {
   ticket: 7,
   attempt: 1,
   skepticDirs: ["/tmp/sk1", "/tmp/sk2", "/tmp/sk3"],
+  skepticVerdictDirs: ["/tmp/wt/.z-review-test-sk1", "/tmp/sk2", "/tmp/sk3"],
 };
 
 describe("blindness gate", () => {
@@ -150,12 +151,16 @@ describe("per-seat lineups", () => {
   test("mixed lineup matches its golden: model line per Agent seat, exact command per CLI seat, briefs verbatim", () => {
     const seats = resolveSkepticSeats(["codex", "agy:gemini-3-pro", "haiku"]);
     const p = norm(reviewerPrompt(INPUT, "/tmp/input.json", TARGET, true, seats));
-    expect(p).toBe(golden("golden-prompt-adversarial-mixed.txt"));
+    expect(p).toBe(golden("golden-prompt-adversarial-mixed.txt").trimEnd());
     // Load-bearing lines, asserted independently of the fixture bytes:
     expect(p).toContain('Skeptic 3 -- Agent seat: one Agent tool call, `model: "haiku"`, `run_in_background: false`');
     expect(p).toContain('codex exec -s workspace-write --cd "/tmp/wt"');
-    expect(p).toContain("--dangerously-skip-permissions --print-timeout 9m30s --model gemini-3-pro");
+    expect(p).toContain("--dangerously-skip-permissions --print-timeout 570s --model gemini-3-pro");
     for (const k of [1, 2, 3]) expect(p).toContain(`SKEPTIC-${k}-BRIEF`);
+    // The cut-off rule rides only CLI seats' briefs (codex, agy); the Agent seat is never cut off.
+    expect(p.split("## Cut-off rule").length - 1).toBe(2);
+    const agentBrief = p.slice(p.indexOf("<<<SKEPTIC-3-BRIEF"));
+    expect(agentBrief).not.toContain("Cut-off rule");
   });
 
   test("an inherit Agent seat renders no model line; a wrong seat count throws", () => {

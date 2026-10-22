@@ -115,6 +115,13 @@ export function readVerdict(path: string, expect: ExpectedSpawn): VerdictCheck {
   if (typeof v.result !== "string" || !allowed.includes(v.result)) {
     return { ok: false, reason: `result ${JSON.stringify(v.result)} is not in ${expect.stage}'s union {${allowed.join(", ")}}` };
   }
+  // Callers string-match notes (the PROVISIONAL: prefix), so a non-string must
+  // be INVALID here, not a TypeError in whoever reads it next. null reads as
+  // absent and is dropped, so the returned verdict honors `notes?: string`.
+  if (v.notes === null) delete v.notes;
+  if (v.notes !== undefined && typeof v.notes !== "string") {
+    return { ok: false, reason: `notes must be a string when present` };
+  }
   if (typeof v.notes === "string" && PLACEHOLDER_RE.test(v.notes)) {
     return { ok: false, reason: `notes still carry the contract's own placeholder -- the template was pasted, not filled` };
   }
@@ -173,7 +180,7 @@ export function quorumFromDisk(
       continue;
     }
     received++;
-    if (check.verdict.result === "UPHELD") unrefuted++;
+    if (check.verdict.result === "UPHELD" && !check.verdict.notes?.startsWith("PROVISIONAL: ")) unrefuted++;
   }
   return { received, of, unrefuted, invalid };
 }

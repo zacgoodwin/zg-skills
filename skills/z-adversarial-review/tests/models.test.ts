@@ -2,12 +2,14 @@
 // reviewer-seat rejection, the two CLI adapter commands, the preflight
 // fail-fast, and the setup verb's statuses -- all offline via injected deps.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
   AGENT_MODELS,
   cliCommand,
+  codexDropDir,
+  seatVerdictDir,
   cliProvidersIn,
   codexTrustHeader,
   hasCodexTrust,
@@ -130,19 +132,38 @@ describe("cliCommand", () => {
   const WT = "D:/repo/.worktrees/review-pr-9";
   const DIR = "D:/out/runs/r/t9/reviewer-1/skeptic-1";
   const INPUT_PATH = "D:/out/input-pr-9.json";
+  const DROP = "D:/repo/.worktrees/review-pr-9/.z-review-test";
 
-  test("codex: workspace-write sandbox scoped to the worktree, verdict dir granted, brief on stdin", () => {
-    const c = cliCommand({ kind: "cli", provider: "codex" }, WT, DIR, INPUT_PATH);
+  test("codex: workspace-write sandbox scoped to the worktree, verdict written in-worktree then moved to the seat dir, brief on stdin", () => {
+    const c = cliCommand({ kind: "cli", provider: "codex" }, WT, DIR, INPUT_PATH, DROP);
+    const drop = DROP;
     expect(c).toBe(
-      `codex exec -s workspace-write --cd "D:/repo/.worktrees/review-pr-9" -c 'sandbox_workspace_write.writable_roots=["D:/out/runs/r/t9/reviewer-1/skeptic-1"]' --skip-git-repo-check - < "D:/out/runs/r/t9/reviewer-1/skeptic-1/brief.txt"`
+      `mkdir "${drop}" || exit $?; set -- codex exec -s workspace-write --cd "D:/repo/.worktrees/review-pr-9" --skip-git-repo-check -; TO=$(command -v timeout || command -v gtimeout); set -m; if [ -n "$TO" ]; then "$TO" -k 10s 570s "$@" < "D:/out/runs/r/t9/reviewer-1/skeptic-1/brief.txt" & else "$@" < "D:/out/runs/r/t9/reviewer-1/skeptic-1/brief.txt" & fi; pid=$!; set +m; dog=; if [ -z "$TO" ]; then ( trap 'kill $! 2>/dev/null; exit' TERM; sleep 570 & wait; trap '' TERM; kill -TERM -- -$pid 2>/dev/null; sleep 10 & wait; kill -KILL -- -$pid 2>/dev/null ) >/dev/null 2>&1 & dog=$!; fi; wait $pid; rc=$?; if [ -n "$dog" ]; then kill $dog 2>/dev/null; wait $dog 2>/dev/null; fi; kill -KILL -- -$pid 2>/dev/null; case $rc in 137|143) rc=124;; esac; move_rc=0; if [ -f "${drop}/verdict.json" ]; then mv -f "${drop}/verdict.json" "D:/out/runs/r/t9/reviewer-1/skeptic-1/verdict.json" || move_rc=$?; else move_rc=1; fi; rm -rf "${drop}"; if [ "$rc" -ne 0 ]; then exit "$rc"; fi; exit "$move_rc"`
     );
+    // No writable_roots grant: on Windows the sandbox account cannot write there anyway.
+    expect(c).not.toContain("writable_roots");
     expect(cliCommand({ kind: "cli", provider: "codex", model: "o3" }, WT, DIR, INPUT_PATH)).toContain(" -m o3 ");
+  });
+
+  test("seatVerdictDir: codex seats write in the worktree drop dir, every other seat in its own seat dir", () => {
+    expect(seatVerdictDir({ kind: "cli", provider: "codex" }, DIR, DROP)).toBe(DROP);
+    expect(seatVerdictDir({ kind: "cli", provider: "agy" }, DIR, DROP)).toBe(DIR);
+    expect(seatVerdictDir({ kind: "agent", model: "inherit" }, DIR, DROP)).toBe(DIR);
+  });
+
+  test("codexDropDir avoids checkout-controlled .z-review paths", () => {
+    const worktree = join(scratch, "drop-worktree");
+    mkdirSync(worktree);
+    writeFileSync(join(worktree, ".z-review"), "tracked collision");
+    const drop = codexDropDir(worktree);
+    expect(drop).not.toBe(join(worktree, ".z-review"));
+    expect(existsSync(drop)).toBe(false);
   });
 
   test("agy: brief as the -p argument, verdict AND input dirs added, permissions skipped per-run, print timeout under the Bash cap", () => {
     const c = cliCommand({ kind: "cli", provider: "agy", model: "gemini-3-pro" }, WT, DIR, INPUT_PATH);
     expect(c).toBe(
-      `cd "D:/repo/.worktrees/review-pr-9" && agy -p "$(cat "D:/out/runs/r/t9/reviewer-1/skeptic-1/brief.txt")" --add-dir "D:/out/runs/r/t9/reviewer-1/skeptic-1" --add-dir "D:/out" --dangerously-skip-permissions --print-timeout 9m30s --model gemini-3-pro`
+      `cd "D:/repo/.worktrees/review-pr-9" && agy -p "$(cat "D:/out/runs/r/t9/reviewer-1/skeptic-1/brief.txt")" --add-dir "D:/out/runs/r/t9/reviewer-1/skeptic-1" --add-dir "D:/out" --dangerously-skip-permissions --print-timeout 570s --model gemini-3-pro`
     );
     expect(cliCommand({ kind: "cli", provider: "agy" }, WT, DIR, INPUT_PATH)).not.toContain("--model");
   });
