@@ -6,6 +6,21 @@ versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-10-20
+
+### Fixed
+
+- A crashed (`failed`) review job blocked the gate forever: roborev can
+  neither close nor cancel a failed job, so re-running the review never
+  cleared it. A failed job now counts as superseded by a later (higher id)
+  `done` review of the same `git_ref`, or of exactly `<merge-base>..<HEAD>`
+  (`GATE_RANGE`, what `--branch` records for the branch as it stands). Any
+  other range, such as a `--since` review or a branch review of an older
+  HEAD, supersedes nothing. A failed job with no later done review,
+  including a crashed `--branch` review, still blocks, and so does any job
+  without a numeric `id` and string `git_ref` (jq orders numbers above
+  `null` and treats `null == null`).
+
 ## [1.0.2] - 2026-08-12
 
 ### Fixed
