@@ -182,7 +182,7 @@ export function skepticBrief(
   verdictDir: string = dir,
   cliSeat = false
 ): string {
-  return `You are SKEPTIC ${k} of 3, a fresh context inside a blinded adversarial code review, blinded exactly as your reviewer is: your ONLY inputs are the ticket body, the acceptance criteria, and the diff, read from ${inputPath} (fields \`ticketBody\`, \`acceptanceCriteria\`, \`diff\`), plus the throwaway worktree at ${input.worktreePath} (yours to execute; nothing you do in it lands anywhere). No other skeptic's verdict reaches you and yours reaches no one but the harness.
+  return `You are SKEPTIC ${k} of 3, a fresh context inside a blinded adversarial code review, blinded exactly as your reviewer is: your ONLY inputs are the ticket body, the acceptance criteria, and the diff, read from ${inputPath} (fields \`ticketBody\`, \`acceptanceCriteria\`, \`diff\`), plus the throwaway worktree at ${input.worktreePath} (yours to execute; nothing you do in it lands anywhere, but the repo under review is two directories up and any change there fails the whole review, so write nothing outside the worktree except your verdict). No other skeptic's verdict reaches you and yours reaches no one but the harness.
 
 Your task is to REFUTE that the diff satisfies the acceptance criteria: find the one criterion it violates, the edge it breaks, a test that passes without the change. Concrete evidence only -- file:line, a command you ran, an input that misbehaves.
 
@@ -316,7 +316,7 @@ Read \`ticketBody\`, \`acceptanceCriteria\`, and \`diff\` from ${inputPath}. Tha
 
 ## Throwaway worktree (head commit checked out; yours to execute)
 ${input.worktreePath}
-Run the typecheck and the tests this diff touches here. Nothing you do in it lands anywhere; discard it when done.
+Run the typecheck and the tests this diff touches here. Nothing you do in it lands anywhere; discard it when done. Outside it is not throwaway: the repo under review is two directories up, and if anything there changes during the review, the whole review fails. Write nothing outside this worktree except your verdict file.
 
 ## Hunt for
 - Acceptance criteria silently weakened, skipped, or asserted less strictly than written.

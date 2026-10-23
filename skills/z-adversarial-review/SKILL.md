@@ -196,7 +196,9 @@ Prints `{ok, result, notes, confidence, quorum}`. `result` is one of
 `quorum` is `{received, of, unrefuted, invalid}` counted off the canonical
 skeptic verdict files `prepare` itself laid out on disk (`null` when
 `--adversarial` is `false`). An `{ok: false, reason}` — missing file,
-mis-addressed envelope, pasted placeholder — means the review FAILED: relay
+mis-addressed envelope, pasted placeholder, or the main checkout changed
+during the review (each path named; revert them by hand, `cleanup` does not)
+— means the review FAILED: relay
 the reason, clean up, and offer to re-run; never reconstruct a verdict from
 the transcript.
 
@@ -288,6 +290,11 @@ bun "$PACK/lib/models.ts" preference --set '["codex","agy"]'
   wrong; the point of the skeptics, the quorum, and the disclosure is that it
   cannot be QUIETLY wrong in the ways this design has already seen.
 - **CLI skeptics execute the PR author's code with their vendor's
-  permission prompts skipped**, sandboxed to the throwaway worktree — the
-  same exposure the Claude reviewer already accepts by running the PR's
-  tests. Stated plainly, not hidden.
+  permission prompts skipped** — the same exposure the Claude reviewer
+  already accepts by running the PR's tests. Stated plainly, not hidden.
+  Only codex is sandboxed to the worktree; agy and the Claude seats can
+  write anywhere, and the worktree sits two directories below the main
+  checkout. So `collect` guards the main checkout instead: any change there
+  outside `.worktrees/`, or to the `.git` state the worktree shares (refs,
+  stash, config, `info/`, hooks, HEAD), fails the review, naming each one.
+  Gitignored files count too, compared by size and mtime.

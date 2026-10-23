@@ -151,6 +151,21 @@ an answer, not an error:
 
 or `{ "ok": false, "reason": "…" }`.
 
+Before it reads any verdict, `collect` checks that the main checkout is
+exactly as `prepare` found it. `prepare` snapshots it into
+`<runRoot>/checkout-snapshot.json`: HEAD (its sha and the branch it points at, or detached), plus every dirty or untracked path
+with its `git status` code and a hash of its bytes, excluding `.worktrees/`
+and an `--out-dir` inside the repo. The worktree shares the main repo's
+`.git`, so the snapshot also covers every local ref (branches, tags, stash; not remote-tracking refs, which a background fetch moves), the
+config, every file in `info/` (exclude, attributes, sparse-checkout), and each hook. Gitignored files (`git status` never
+lists them) are recorded separately by size and mtime, which stays cheap on a
+large `node_modules`; a submodule or nested repo, untracked or ignored, is
+digested over every file under it. Any difference (a new, changed, or
+deleted path, ref, or hook, or a moved HEAD) is `ok: false` with each one
+named in `reason`; so is a missing snapshot. An ignored-file write that
+keeps both size and mtime is not seen. `cleanup` removes only the worktree, never a stray path, so revert
+those by hand.
+
 | Field | Meaning |
 |---|---|
 | `result` | One of `REVIEW-APPROVE`, `REVIEW-FINDINGS`, `NEEDS-HUMAN`, `BLOCKED`, `CONFUSED`. |

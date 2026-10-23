@@ -783,6 +783,262 @@ describe("collect", () => {
     if (!r.ok) expect(r.reason).toContain("runId");
     cleanup(repo, m.worktreePath);
   });
+
+  // Kata 6z9p: on SCP PR #4 a seat left an empty, untracked VERSION at the
+  // repo root, two directories above its worktree, and nothing noticed.
+  describe("main-checkout guard", () => {
+    const approve = (m: { runId: string; verdictPath: string }, n: number) =>
+      writeVerdict(m.verdictPath, m, n, "reviewer", "REVIEW-APPROVE", { confidence: 90 });
+
+    test("a seat writing ../../STRAY from its worktree fails collect, naming the path", () => {
+      const m = runPrepare(130, { headRefOid: smallHeadSha });
+      writeFileSync(join(m.worktreePath, "..", "..", "STRAY"), "");
+      approve(m, 130);
+      const r = collect(m.verdictPath, m.runRoot, m.runId, 130, m.adversarial);
+      rmSync(join(repo, "STRAY"));
+      cleanup(repo, m.worktreePath);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain("paths changed: STRAY");
+    });
+
+    test("a write into a tracked file, or a further write to one already dirty, is caught", () => {
+      writeFileSync(join(repo, "DIRTY"), "before the review\n"); // untracked before prepare
+      const m = runPrepare(131, { headRefOid: smallHeadSha });
+      writeFileSync(join(repo, "DIRTY"), "changed mid-review\n");
+      writeFileSync(join(repo, "util.ts"), "export const a = 99;\n");
+      approve(m, 131);
+      const r = collect(m.verdictPath, m.runRoot, m.runId, 131, m.adversarial);
+      rmSync(join(repo, "DIRTY"));
+      git(repo, "checkout", "--", "util.ts");
+      cleanup(repo, m.worktreePath);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain("paths changed: DIRTY, util.ts");
+    });
+
+    test("a commit or checkout in the main checkout is caught", () => {
+      const m = runPrepare(132, { headRefOid: smallHeadSha });
+      git(repo, "checkout", "-q", baseSha);
+      approve(m, 132);
+      const r = collect(m.verdictPath, m.runRoot, m.runId, 132, m.adversarial);
+      git(repo, "checkout", "-q", smallHeadSha);
+      cleanup(repo, m.worktreePath);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain(`HEAD moved ${smallHeadSha} (detached) -> ${baseSha} (detached)`);
+    });
+
+    // Round 5 of PR #6's review: HEAD was compared by sha only, so a switch
+    // or detach at the same sha (a write to .git/HEAD) collected ok.
+    test("a branch switch or detach at the same sha in the main checkout is caught", () => {
+      git(repo, "switch", "-q", "-c", "zar-probe");
+      const m = runPrepare(141, { headRefOid: smallHeadSha });
+      git(repo, "checkout", "-q", "--detach");
+      writeFileSync(join(repo, ".git", "info", "attributes"), "* -text\n");
+      approve(m, 141);
+      const r = collect(m.verdictPath, m.runRoot, m.runId, 141, m.adversarial);
+      rmSync(join(repo, ".git", "info", "attributes"));
+      git(repo, "branch", "-D", "zar-probe");
+      cleanup(repo, m.worktreePath);
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.reason).toContain(`HEAD moved ${smallHeadSha} (refs/heads/zar-probe) -> ${smallHeadSha} (detached)`);
+        expect(r.reason).toContain(".git/info/attributes");
+      }
+    });
+
+    test("writes inside the worktree and an in-repo out-dir are no false positive", () => {
+      const { prPath } = prJson(133, { headRefOid: smallHeadSha });
+      const inRepoOut = join(repo, "zar-out");
+      const m = prepare({ "pr-json": prPath, repo, "out-dir": inRepoOut }, okDeps);
+      writeFileSync(join(m.worktreePath, "build-output.txt"), "tests ran here\n");
+      mkdirSync(join(m.worktreePath, ".z-review-drop"), { recursive: true });
+      approve(m, 133);
+      const r = collect(m.verdictPath, m.runRoot, m.runId, 133, m.adversarial);
+      cleanup(repo, m.worktreePath);
+      rmSync(inRepoOut, { recursive: true, force: true });
+      if (!r.ok) throw new Error(r.reason);
+      expect(r.result).toBe("REVIEW-APPROVE");
+    });
+
+    // The worktree shares the main repo's .git: PR #6's adversarial review
+    // planted a hook and ran git config/branch/stash from inside one, and
+    // `git status` saw none of it.
+    test("git state changed through the shared .git (hook, config, exclude, branch, stash) is caught", () => {
+      const m = runPrepare(136, { headRefOid: smallHeadSha });
+      const wt = m.worktreePath;
+      const hooks = join(repo, git(repo, "rev-parse", "--git-path", "hooks"));
+      writeFileSync(join(hooks, "pre-commit"), "#!/bin/sh\necho planted\n");
+      git(wt, "config", "zar.stray", "1");
+      writeFileSync(join(repo, ".git", "info", "exclude"), "IGNORED-STRAY\n", { flag: "a" });
+      git(wt, "branch", "zar-stray");
+      writeFileSync(join(wt, "stash-me.txt"), "x\n");
+      git(wt, "-c", "user.email=t@t", "-c", "user.name=t", "stash", "-u", "-q");
+      approve(m, 136);
+      const r = collect(m.verdictPath, m.runRoot, m.runId, 136, m.adversarial);
+      rmSync(join(hooks, "pre-commit"));
+      git(repo, "config", "--unset", "zar.stray");
+      const ex = readFileSync(join(repo, ".git", "info", "exclude"), "utf8");
+      writeFileSync(join(repo, ".git", "info", "exclude"), ex.replace("IGNORED-STRAY\n", ""));
+      git(repo, "branch", "-D", "zar-stray");
+      git(repo, "stash", "drop", "-q");
+      cleanup(repo, m.worktreePath);
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        for (const key of [".git/hooks/pre-commit", ".git/config", ".git/info/exclude", "ref refs/heads/zar-stray", "ref refs/stash"]) {
+          expect(r.reason).toContain(key);
+        }
+      }
+    });
+
+    // Round 2 of PR #6's review: ../../debug.log, ../../node_modules/STRAY
+    // and a write inside an untracked nested repo all collected ok.
+    test("writes into gitignored paths and inside an untracked nested repo are caught", () => {
+      const exclude = join(repo, ".git", "info", "exclude");
+      const exBefore = readFileSync(exclude, "utf8");
+      writeFileSync(exclude, `${exBefore}*.log\nnode_modules/\n`);
+      mkdirSync(join(repo, "node_modules", "dep"), { recursive: true });
+      writeFileSync(join(repo, "node_modules", "dep", "index.js"), "module.exports = 1;\n");
+      mkdirSync(join(repo, "nest"));
+      git(join(repo, "nest"), "init", "-q");
+      writeFileSync(join(repo, "nest", "a.txt"), "a\n");
+      const m = runPrepare(137, { headRefOid: smallHeadSha });
+      writeFileSync(join(repo, "debug.log"), "");
+      writeFileSync(join(repo, "node_modules", "STRAY"), "");
+      writeFileSync(join(repo, "node_modules", "dep", "index.js"), "module.exports = 22;\n");
+      writeFileSync(join(repo, "nest", "STRAY"), "");
+      approve(m, 137);
+      const r = collect(m.verdictPath, m.runRoot, m.runId, 137, m.adversarial);
+      for (const p of ["debug.log", "node_modules", "nest"]) rmSync(join(repo, p), { recursive: true, force: true });
+      writeFileSync(exclude, exBefore);
+      cleanup(repo, m.worktreePath);
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        for (const key of ["ignored debug.log", "ignored node_modules/STRAY", "ignored node_modules/dep/index.js", "nest/"]) {
+          expect(r.reason).toContain(key);
+        }
+      }
+    });
+
+    // Round 3 of PR #6's review: in a repo that gitignores .worktrees/ (as
+    // zg-skills does), ls-files listed the review's own worktree as a new
+    // ignored entry and every clean run failed.
+    test("a repo that gitignores .worktrees/ and the out-dir still collects a clean run ok", () => {
+      const exclude = join(repo, ".git", "info", "exclude");
+      const exBefore = readFileSync(exclude, "utf8");
+      writeFileSync(exclude, `${exBefore}.worktrees/\nzar-out/\n`);
+      const { prPath } = prJson(138, { headRefOid: smallHeadSha });
+      const inRepoOut = join(repo, "zar-out");
+      const m = prepare({ "pr-json": prPath, repo, "out-dir": inRepoOut }, okDeps);
+      writeFileSync(join(m.worktreePath, "build-output.txt"), "tests ran here\n");
+      approve(m, 138);
+      const r = collect(m.verdictPath, m.runRoot, m.runId, 138, m.adversarial);
+      cleanup(repo, m.worktreePath);
+      rmSync(inRepoOut, { recursive: true, force: true });
+      writeFileSync(exclude, exBefore);
+      if (!r.ok) throw new Error(r.reason);
+      expect(r.result).toBe("REVIEW-APPROVE");
+    });
+
+    // Round 6 of PR #6's review: a clean submodule is invisible to both
+    // `git status` and the superproject's ignored listing.
+    test("an ignored write inside a clean submodule is caught", () => {
+      const before = git(repo, "rev-parse", "HEAD");
+      const sub = join(repo, "sub");
+      mkdirSync(sub);
+      git(sub, "init", "-q");
+      writeFileSync(join(sub, ".gitignore"), "*.log\n");
+      git(sub, "add", ".gitignore");
+      git(sub, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "sub");
+      git(repo, "add", "sub");
+      git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--no-verify", "-m", "add sub");
+      const m = runPrepare(142, { headRefOid: smallHeadSha });
+      writeFileSync(join(sub, "debug.log"), "x\n");
+      approve(m, 142);
+      const r = collect(m.verdictPath, m.runRoot, m.runId, 142, m.adversarial);
+      git(repo, "checkout", "-q", before);
+      rmSync(sub, { recursive: true, force: true });
+      cleanup(repo, m.worktreePath);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain("/submodule sub");
+    });
+
+    test("a stray file named like a synthetic key cannot mask it", () => {
+      const m = runPrepare(143, { headRefOid: smallHeadSha });
+      mkdirSync(join(repo, "ref refs", "heads"), { recursive: true });
+      writeFileSync(join(repo, "ref refs", "heads", "main"), git(repo, "rev-parse", "refs/heads/main"));
+      approve(m, 143);
+      const r = collect(m.verdictPath, m.runRoot, m.runId, 143, m.adversarial);
+      rmSync(join(repo, "ref refs"), { recursive: true, force: true });
+      cleanup(repo, m.worktreePath);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain("ref refs/heads/main");
+    });
+
+    // Round 4 of PR #6's review: a GITIGNORED nested repo is one `vendor/lib/`
+    // ls-files entry whose mtime does not move when a file inside changes.
+    test("a write inside a gitignored nested repo is caught", () => {
+      const exclude = join(repo, ".git", "info", "exclude");
+      const exBefore = readFileSync(exclude, "utf8");
+      writeFileSync(exclude, `${exBefore}vendor/\n`);
+      mkdirSync(join(repo, "vendor", "lib", "src"), { recursive: true });
+      git(join(repo, "vendor", "lib"), "init", "-q");
+      writeFileSync(join(repo, "vendor", "lib", "README"), "r\n");
+      const m = runPrepare(139, { headRefOid: smallHeadSha });
+      writeFileSync(join(repo, "vendor", "lib", "src", "STRAY"), "");
+      approve(m, 139);
+      const r = collect(m.verdictPath, m.runRoot, m.runId, 139, m.adversarial);
+      rmSync(join(repo, "vendor"), { recursive: true, force: true });
+      writeFileSync(exclude, exBefore);
+      cleanup(repo, m.worktreePath);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain("ignored vendor/lib/");
+    });
+
+    test("a remote-tracking ref moving mid-review (a background fetch) is no false positive", () => {
+      const m = runPrepare(140, { headRefOid: smallHeadSha });
+      git(repo, "update-ref", "refs/remotes/origin/main", bigHeadSha);
+      approve(m, 140);
+      const r = collect(m.verdictPath, m.runRoot, m.runId, 140, m.adversarial);
+      git(repo, "update-ref", "-d", "refs/remotes/origin/main");
+      cleanup(repo, m.worktreePath);
+      if (!r.ok) throw new Error(r.reason);
+      expect(r.result).toBe("REVIEW-APPROVE");
+    });
+
+    // The skill runs prepare and collect as separate processes, so the
+    // snapshot must compare equal across them, not just within one.
+    test("collect in a fresh process: a dirty-but-untouched checkout stays ok, a stray write fails", () => {
+      writeFileSync(join(repo, "DIRTY"), "dirty before and after\n");
+      const m = runPrepare(135, { headRefOid: smallHeadSha });
+      approve(m, 135);
+      const collectCli = () => {
+        const p = Bun.spawnSync(
+          ["bun", join(REPO_ROOT_FOR_MOCK, "lib", "review.ts"), "collect", "--verdict", m.verdictPath,
+            "--run-root", m.runRoot, "--run", m.runId, "--ticket", "135", "--adversarial", String(m.adversarial)],
+          { stdout: "pipe", stderr: "pipe" }
+        );
+        return JSON.parse(p.stdout.toString());
+      };
+      const clean = collectCli();
+      writeFileSync(join(repo, "STRAY2"), "");
+      const dirty = collectCli();
+      rmSync(join(repo, "DIRTY"));
+      rmSync(join(repo, "STRAY2"));
+      cleanup(repo, m.worktreePath);
+      expect(clean).toMatchObject({ ok: true, result: "REVIEW-APPROVE" });
+      expect(dirty.ok).toBe(false);
+      expect(dirty.reason).toContain("paths changed: STRAY2");
+    });
+
+    test("a run root without prepare's snapshot fails closed", () => {
+      const m = runPrepare(134, { headRefOid: smallHeadSha });
+      rmSync(join(m.runRoot, "checkout-snapshot.json"));
+      approve(m, 134);
+      const r = collect(m.verdictPath, m.runRoot, m.runId, 134, m.adversarial);
+      cleanup(repo, m.worktreePath);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain("no main-checkout snapshot");
+    });
+  });
 });
 
 // -- cleanup ------------------------------------------------------------------
@@ -797,5 +1053,14 @@ describe("cleanup", () => {
     const again = runPrepare(112);
     expect(git(again.worktreePath, "rev-parse", "HEAD")).toBe(bigHeadSha);
     cleanup(repo, again.worktreePath);
+  });
+
+  test("prepare then cleanup leaves the main checkout's git status as it found it", () => {
+    const status = () => git(repo, "status", "--porcelain", "--untracked-files=all");
+    const before = status();
+    const m = runPrepare(113);
+    writeFileSync(join(m.worktreePath, "scratch.txt"), "seat output\n");
+    cleanup(repo, m.worktreePath);
+    expect(status()).toBe(before);
   });
 });

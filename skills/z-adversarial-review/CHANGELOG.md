@@ -8,6 +8,23 @@ versioning follows [SemVer](https://semver.org/).
 
 ### Fixed
 
+- A review seat could write into the main checkout, undetected. On SCP PR #4
+  an empty, untracked `VERSION` appeared at the repo root mid-review; agy and
+  the Claude seats can write anywhere, and the worktree sits two directories
+  below the main checkout. `prepare` now snapshots the main checkout (HEAD,
+  plus every dirty or untracked path with its status and a content hash,
+  excluding `.worktrees/` and an in-repo `--out-dir`) into the run root, and
+  `collect` fails the review, naming each path, when anything there changed
+  or the snapshot is missing. Because the worktree shares the main repo's
+  `.git`, the snapshot also covers every local ref (branches, tags, stash; not remote-tracking refs, which a background fetch moves), the
+  config, every file in `info/`, the hooks dir, and which branch HEAD points at: the PR's own adversarial review
+  showed a seat could plant a pre-commit hook from inside its worktree.
+  Gitignored files (`../../debug.log`, `node_modules/`) are covered by size
+  and mtime, and a submodule or nested repo (untracked or ignored) by a digest over its files.
+  Seat briefs
+  no longer say the review cannot land anywhere: they name the repo two
+  directories up and say any write there fails the review.
+
 - codex skeptic verdicts now count on Windows. codex runs its tools as a
   separate sandbox account (`CodexSandboxOffline`) with no ACL on the run
   directory under the user's Temp, so the old

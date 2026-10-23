@@ -21,8 +21,9 @@
 // the assembled ticketBody opens with a one-line source note the reviewer
 // weighs, and the manifest carries `specSource` so the session's report
 // repeats the caveat to the human.
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { handleCliError, parseFlags, readJson, requireFlag, str, ZError } from "./cli.ts";
 import {
   briefPath,
@@ -148,6 +149,173 @@ function git(
 
 function hasCommit(repo: string, sha: string): boolean {
   return git(repo, ["cat-file", "-e", `${sha}^{commit}`], true).ok;
+}
+
+// -- main-checkout guard ------------------------------------------------------
+
+// A review must never change the repo under review, yet every seat's cwd is a
+// worktree two directories below the main checkout, and Claude and agy seats
+// can write anywhere: SCP PR #4 grew an empty, untracked VERSION at its root
+// mid-review. prepare snapshots the main checkout into the run root; collect
+// re-takes it and refuses a clean verdict on any difference. Excluded:
+// .worktrees/ (every review's worktree, this one's included) and an out-dir
+// inside the repo (the run's own artifacts). The worktree shares the main
+// repo's .git, so git state a seat can change from inside it is covered too:
+// every local ref (branches, tags, stash), config, info/, and the hooks dir
+// (a planted hook runs on the user's next commit).
+// Gitignored files are listed separately and compared by size + mtime;
+// submodules and nested repos by a digest over their trees. Synthetic keys
+// start with "/", which no git path can, so a stray file named like one
+// ("ref refs/heads/main") cannot overwrite it.
+// ponytail: an ignored-file write that keeps both size and mtime is missed,
+// and seats can reach the snapshot file under the run root. Fine against
+// accidents, not against a seat that means it; hashing ignored files too is
+// the upgrade if that ever matters.
+const CHECKOUT_SNAPSHOT = "checkout-snapshot.json";
+
+interface CheckoutSnapshot {
+  repo: string;
+  excludes: string[];
+  head: string;
+  paths: Record<string, string>; // path -> "<XY status> <content hash>"
+}
+
+function checkoutExcludes(repo: string, outDir: string): string[] {
+  const excludes = [":(exclude).worktrees"];
+  const rel = relative(repo, outDir).replaceAll("\\", "/");
+  if (rel !== "" && !rel.startsWith("..") && !isAbsolute(rel)) excludes.push(`:(exclude)${rel}`);
+  return excludes;
+}
+
+// Every dirty or untracked path with its status and a hash of its bytes, so a
+// further write to an already-dirty file shows up too; plus HEAD, sha AND
+// what it points at, so a commit, a checkout, or a detach or branch switch at
+// the same sha in the main checkout does as well.
+function checkoutState(repo: string, excludes: string[]): Omit<CheckoutSnapshot, "repo" | "excludes"> {
+  const sha = git(repo, ["rev-parse", "HEAD"], true).stdout.trim();
+  const branch = git(repo, ["symbolic-ref", "-q", "HEAD"], true).stdout.trim();
+  const head = `${sha} (${branch || "detached"})`;
+  const status = git(repo, [
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--no-renames",
+    "--untracked-files=all",
+    "--",
+    ".",
+    ...excludes,
+  ]).stdout;
+  const abs = (p: string): string => (isAbsolute(p) ? p : join(repo, p));
+  // Size + mtime, not content: cheap enough for every file of a node_modules.
+  const statOf = (p: string): string => {
+    try {
+      const s = statSync(p);
+      return `${s.size}:${s.mtimeMs}`;
+    } catch {
+      return "absent";
+    }
+  };
+  // A directory entry (an untracked nested repo shows as `?? nest/`) is
+  // digested over every file under it, so a write inside it shows too.
+  const hashOf = (p: string): string => {
+    try {
+      if (statSync(abs(p)).isDirectory()) {
+        const h = createHash("sha256");
+        for (const f of (readdirSync(abs(p), { recursive: true }) as string[]).sort()) {
+          h.update(`${f}\0${statOf(join(abs(p), f))}\0`);
+        }
+        return `tree ${h.digest("hex")}`;
+      }
+      return createHash("sha256").update(readFileSync(abs(p))).digest("hex");
+    } catch {
+      return "absent"; // deleted
+    }
+  };
+  const paths: Record<string, string> = {};
+  for (const rec of status.split("\0").filter(Boolean)) {
+    const path = rec.slice(3);
+    paths[path] = `${rec.slice(0, 2)} ${hashOf(path)}`;
+  }
+  // A clean submodule is invisible to `git status`, and the superproject's
+  // ls-files --ignored does not recurse into it, so digest each one's tree;
+  // a write inside names the submodule, not the file.
+  const index = git(repo, ["ls-files", "-s", "-z", "--", ".", ...excludes]).stdout;
+  for (const rec of index.split("\0").filter((r) => r.startsWith("160000 "))) {
+    const p = rec.slice(rec.indexOf("\t") + 1);
+    paths[`/submodule ${p}`] = hashOf(p);
+  }
+  // Gitignored files never appear in `git status`, yet a seat writing
+  // ../../debug.log or into node_modules changes the checkout all the same.
+  const ignored = git(repo, [
+    "ls-files",
+    "-z",
+    "--others",
+    "--ignored",
+    "--exclude-standard",
+    "--",
+    ".",
+    ...excludes,
+  ]).stdout;
+  // The pathspec excludes do not drop a nested repo's directory entry: in a
+  // repo that ignores .worktrees/, ls-files still prints the review's own
+  // worktree as `.worktrees/review-pr-<N>-<runId>/`. Filter by prefix too.
+  const excluded = excludes.map((e) => `${e.replace(":(exclude)", "")}/`);
+  for (const p of ignored.split("\0").filter(Boolean)) {
+    // An ignored nested repo is one `dir/` entry, whose own mtime does not
+    // move when a file inside it changes: digest its tree like `?? nest/`.
+    if (excluded.some((pre) => p.startsWith(pre))) continue;
+    paths[`/ignored ${p}`] = p.endsWith("/") ? hashOf(p) : statOf(abs(p));
+  }
+  // Shared git state, keyed so a reason names it readably. --git-path
+  // honors core.hooksPath and resolves into the common dir.
+  // info/ holds exclude, attributes, sparse-checkout: all shared.
+  const [hooks, config, info] = git(repo, [
+    "rev-parse",
+    "--git-path",
+    "hooks",
+    "--git-path",
+    "config",
+    "--git-path",
+    "info",
+  ]).stdout.trim().split(/\r?\n/);
+  paths[`/git ${config}`] = hashOf(config);
+  for (const dir of [hooks, info]) {
+    if (!existsSync(abs(dir))) continue;
+    for (const name of readdirSync(abs(dir))) paths[`/git ${dir}/${name}`] = hashOf(join(abs(dir), name));
+  }
+  // Remote-tracking refs are left out: a background fetch, or a concurrent
+  // review's prepare, moves them during a clean run.
+  const refs = git(repo, ["for-each-ref", "--format=%(refname) %(objectname)"]).stdout;
+  for (const line of refs.split(/\r?\n/).filter((l) => l && !l.startsWith("refs/remotes/"))) {
+    const [name, sha] = line.split(" ");
+    paths[`/ref ${name}`] = sha;
+  }
+  return { head, paths };
+}
+
+function snapshotCheckout(repo: string, outDir: string, runRoot: string): void {
+  const excludes = checkoutExcludes(repo, outDir);
+  const snap: CheckoutSnapshot = { repo, excludes, ...checkoutState(repo, excludes) };
+  writeFileSync(join(runRoot, CHECKOUT_SNAPSHOT), JSON.stringify(snap, null, 2));
+}
+
+// null when the main checkout is exactly as prepare found it, else the reason
+// collect reports, naming every new, changed, or vanished path.
+export function checkoutChanges(runRoot: string): string | null {
+  const file = join(runRoot, CHECKOUT_SNAPSHOT);
+  if (!existsSync(file)) {
+    return `no main-checkout snapshot at ${file}; prepare writes one, so this run cannot prove the repo under review is unchanged. Re-run the review.`;
+  }
+  const before = readJson(file) as CheckoutSnapshot;
+  const now = checkoutState(before.repo, before.excludes);
+  const changed = [...new Set([...Object.keys(before.paths), ...Object.keys(now.paths)])]
+    .filter((p) => before.paths[p] !== now.paths[p])
+    .sort();
+  const problems: string[] = [];
+  if (now.head !== before.head) problems.push(`HEAD moved ${before.head || "(none)"} -> ${now.head || "(none)"}`);
+  if (changed.length > 0) problems.push(`paths changed: ${changed.join(", ")}`);
+  if (problems.length === 0) return null;
+  return `the main checkout at ${before.repo} changed during the review (${problems.join("; ")}). A review seat may have written outside its worktree; the verdict is not trusted. Inspect and revert these by hand: cleanup removes only the worktree.`;
 }
 
 // -- prepare ------------------------------------------------------------------
@@ -335,6 +503,10 @@ export function prepare(
   // path unique per run; the existsSync guard below is now just a defensive
   // no-op against a runId collision, not a cross-run self-heal.
   const worktreePath = join(repo, ".worktrees", `review-pr-${pr.number}-${runId}`);
+  // Snapshot before the first write into the repo (the worktree add below).
+  const runRoot = join(outDir, "runs", runId);
+  mkdirSync(runRoot, { recursive: true });
+  snapshotCheckout(repo, outDir, runRoot);
   git(repo, ["worktree", "prune"], true);
   if (existsSync(worktreePath)) {
     git(repo, ["worktree", "remove", "--force", worktreePath], true);
@@ -365,7 +537,6 @@ export function prepare(
   // verdict.json lands in its stage dir, each skeptic's in a skeptic-<k>/
   // under it -- which is what lets quorumFromDisk's path-trust rule apply
   // unchanged.
-  const runRoot = join(outDir, "runs", runId);
   const reviewerDir = stageDest(outDir, runId, pr.number, "reviewer", STANDALONE_ATTEMPT);
   const skepticDirs = [1, 2, 3].map((k) => join(reviewerDir, `skeptic-${k}`));
   const skepticVerdictDirs = skepticSeats.map((seat, idx) =>
@@ -464,6 +635,10 @@ export function collect(
     stage: "reviewer",
     attempt: STANDALONE_ATTEMPT,
   };
+  // Checked first: a review that wrote into the repo it reviewed has no
+  // verdict worth reading, whatever the file says.
+  const moved = checkoutChanges(runRoot);
+  if (moved) return { ok: false, reason: moved };
   const check = readVerdict(verdictFile, expect);
   if (!check.ok) return { ok: false, reason: check.reason };
   const v = check.verdict;
@@ -536,7 +711,9 @@ const USAGE = `review <command> [args]
 
   collect --verdict <verdict.json> --run-root <dir> --run <runId> --ticket <n>
           --adversarial <true|false>
-      Validate the reviewer's verdict file against the spawn prepare minted
+      First check the main checkout against prepare's snapshot: any change
+      outside .worktrees/ is {ok:false} naming each path. Then validate the
+      reviewer's verdict file against the spawn prepare minted
       (all four values are in prepare's manifest), then -- when --adversarial
       is true -- count the skeptic quorum off the canonical skeptic-<1,2,3>
       verdict files prepare itself laid out under --run-root (never off the
