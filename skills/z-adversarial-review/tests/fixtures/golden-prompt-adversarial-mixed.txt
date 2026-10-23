@@ -5,7 +5,7 @@ Read `ticketBody`, `acceptanceCriteria`, and `diff` from /tmp/input.json. That f
 
 ## Throwaway worktree (head commit checked out; yours to execute)
 /tmp/wt
-Run the typecheck and the tests this diff touches here. Nothing you do in it lands anywhere; discard it when done.
+Run the typecheck and the tests this diff touches here. Nothing you do in it lands anywhere; discard it when done. Outside it is not throwaway: the repo under review is two directories up, and if anything there changes during the review, the whole review fails. Write nothing outside this worktree except your verdict file.
 
 ## Hunt for
 - Acceptance criteria silently weakened, skipped, or asserted less strictly than written.
@@ -38,7 +38,7 @@ mkdir "/tmp/wt/.z-review-test-sk1" || exit $?; set -- codex exec -s workspace-wr
 The command itself feeds this seat's brief -- already on disk at /tmp/sk1/brief.txt -- to the CLI. The brief is reproduced below for the record only; the command reads the FILE, so paste nothing:
 
 <<<SKEPTIC-1-BRIEF
-You are SKEPTIC 1 of 3, a fresh context inside a blinded adversarial code review, blinded exactly as your reviewer is: your ONLY inputs are the ticket body, the acceptance criteria, and the diff, read from /tmp/input.json (fields `ticketBody`, `acceptanceCriteria`, `diff`), plus the throwaway worktree at /tmp/wt (yours to execute; nothing you do in it lands anywhere). No other skeptic's verdict reaches you and yours reaches no one but the harness.
+You are SKEPTIC 1 of 3, a fresh context inside a blinded adversarial code review, blinded exactly as your reviewer is: your ONLY inputs are the ticket body, the acceptance criteria, and the diff, read from /tmp/input.json (fields `ticketBody`, `acceptanceCriteria`, `diff`), plus the throwaway worktree at /tmp/wt (yours to execute; nothing you do in it lands anywhere, but the repo under review is two directories up and any change there fails the whole review, so write nothing outside the worktree except your verdict). No other skeptic's verdict reaches you and yours reaches no one but the harness.
 
 Your task is to REFUTE that the diff satisfies the acceptance criteria: find the one criterion it violates, the edge it breaks, a test that passes without the change. Concrete evidence only -- file:line, a command you ran, an input that misbehaves.
 
@@ -88,7 +88,7 @@ cd "/tmp/wt" && agy -p "$(cat "/tmp/sk2/brief.txt")" --add-dir "/tmp/sk2" --add-
 The command itself feeds this seat's brief -- already on disk at /tmp/sk2/brief.txt -- to the CLI. The brief is reproduced below for the record only; the command reads the FILE, so paste nothing:
 
 <<<SKEPTIC-2-BRIEF
-You are SKEPTIC 2 of 3, a fresh context inside a blinded adversarial code review, blinded exactly as your reviewer is: your ONLY inputs are the ticket body, the acceptance criteria, and the diff, read from /tmp/input.json (fields `ticketBody`, `acceptanceCriteria`, `diff`), plus the throwaway worktree at /tmp/wt (yours to execute; nothing you do in it lands anywhere). No other skeptic's verdict reaches you and yours reaches no one but the harness.
+You are SKEPTIC 2 of 3, a fresh context inside a blinded adversarial code review, blinded exactly as your reviewer is: your ONLY inputs are the ticket body, the acceptance criteria, and the diff, read from /tmp/input.json (fields `ticketBody`, `acceptanceCriteria`, `diff`), plus the throwaway worktree at /tmp/wt (yours to execute; nothing you do in it lands anywhere, but the repo under review is two directories up and any change there fails the whole review, so write nothing outside the worktree except your verdict). No other skeptic's verdict reaches you and yours reaches no one but the harness.
 
 Your task is to REFUTE that the diff satisfies the acceptance criteria: find the one criterion it violates, the edge it breaks, a test that passes without the change. Concrete evidence only -- file:line, a command you ran, an input that misbehaves.
 
@@ -132,7 +132,7 @@ SKEPTIC-2-BRIEF
 ### Skeptic 3 -- Agent seat: one Agent tool call, `model: "haiku"`, `run_in_background: false`, prompt = the brief below VERBATIM (edit nothing)
 
 <<<SKEPTIC-3-BRIEF
-You are SKEPTIC 3 of 3, a fresh context inside a blinded adversarial code review, blinded exactly as your reviewer is: your ONLY inputs are the ticket body, the acceptance criteria, and the diff, read from /tmp/input.json (fields `ticketBody`, `acceptanceCriteria`, `diff`), plus the throwaway worktree at /tmp/wt (yours to execute; nothing you do in it lands anywhere). No other skeptic's verdict reaches you and yours reaches no one but the harness.
+You are SKEPTIC 3 of 3, a fresh context inside a blinded adversarial code review, blinded exactly as your reviewer is: your ONLY inputs are the ticket body, the acceptance criteria, and the diff, read from /tmp/input.json (fields `ticketBody`, `acceptanceCriteria`, `diff`), plus the throwaway worktree at /tmp/wt (yours to execute; nothing you do in it lands anywhere, but the repo under review is two directories up and any change there fails the whole review, so write nothing outside the worktree except your verdict). No other skeptic's verdict reaches you and yours reaches no one but the harness.
 
 Your task is to REFUTE that the diff satisfies the acceptance criteria: find the one criterion it violates, the edge it breaks, a test that passes without the change. Concrete evidence only -- file:line, a command you ran, an input that misbehaves.
 

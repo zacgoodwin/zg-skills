@@ -183,4 +183,7 @@ Before calling any change done: `bun test && bun run typecheck`.
   skipped, inside a throwaway worktree of **the PR author's code** — the
   same exposure the Claude reviewer already accepts by running the PR's
   tests. Review code you would not execute at your peril, whatever the
-  provider.
+  provider. Only codex's sandbox confines it to the worktree; `collect`
+  fails any review during which the main checkout or its shared `.git`
+  state (refs, stash, config, hooks) changed, naming each one. Gitignored
+  files count too, compared by size and mtime.

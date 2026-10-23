@@ -5,7 +5,7 @@ Read `ticketBody`, `acceptanceCriteria`, and `diff` from /tmp/input.json. That f
 
 ## Throwaway worktree (head commit checked out; yours to execute)
 /tmp/wt
-Run the typecheck and the tests this diff touches here. Nothing you do in it lands anywhere; discard it when done.
+Run the typecheck and the tests this diff touches here. Nothing you do in it lands anywhere; discard it when done. Outside it is not throwaway: the repo under review is two directories up, and if anything there changes during the review, the whole review fails. Write nothing outside this worktree except your verdict file.
 
 ## Hunt for
 - Acceptance criteria silently weakened, skipped, or asserted less strictly than written.
