@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Gate test for the stack-ship skill package. Deterministic, offline, <2s.
 #   bash tests/gate.sh
-# Verifies: script syntax, SKILL.md frontmatter, and the fail-closed jq gate
-# published in SKILL.md — extracted from SKILL.md itself so the tested program
-# is byte-for-byte the shipped one (no drift between doc and test).
+# Verifies: script syntax, SKILL.md frontmatter, the fail-closed gate.jq that
+# SKILL.md runs, and the range setup and version-bump block extracted from
+# SKILL.md itself so the tested code is byte-for-byte the shipped code.
 set -u
 cd "$(dirname "$0")/.."
 fail=0
@@ -53,16 +53,20 @@ else
   range_case missing
 fi
 
-# Extract the jq program from SKILL.md's second bash fence: everything between
-# "jq -e '" and the closing "' >/dev/null".
-prog=$(awk '/^```bash/{n++} /^```$/{inb=0} n==2 && inb {print} n==2 && /^```bash/{inb=1}' SKILL.md \
-  | sed -n "/jq -e '/,\$p" | sed "1s/.*jq -e '//" | sed "s/' >\\/dev\\/null.*//")
-if [ -z "$prog" ]; then
-  bad "could not extract jq gate from SKILL.md"
+# The gate is a file SKILL.md runs with jq -f. An inline program there is
+# exposed to whatever rewrites the command on its way to jq (a hook ate a
+# backslash from one), so SKILL.md must carry none.
+grep -q 'jq -e -f "$PACK/gate.jq"' SKILL.md \
+  && ok "SKILL.md runs gate.jq" || bad "SKILL.md does not run jq -e -f \"\$PACK/gate.jq\""
+grep -nE "jq( -[a-z]+)* '" SKILL.md \
+  && bad "SKILL.md carries an inline jq program" || ok "no inline jq program in SKILL.md"
+
+if ! jq -n -f gate.jq >/dev/null 2>&1; then
+  bad "gate.jq missing or does not compile"
 else
-  ok "jq gate extracted from SKILL.md"
+  ok "gate.jq compiles"
   expect() { # pass|fail json label
-    if printf '%s' "$2" | jq -e "$prog" >/dev/null 2>&1; then got=pass; else got=fail; fi
+    if printf '%s' "$2" | jq -e -f gate.jq >/dev/null 2>&1; then got=pass; else got=fail; fi
     [ "$got" = "$1" ] && ok "gate $1: $3" || bad "gate expected $1 got $got: $3"
   }
   expect fail 'null'                                       "null ledger response (no evidence)"
@@ -103,22 +107,47 @@ else
   expect fail '{}'                                         "non-array response"
 fi
 
-# The version-bump line published in SKILL.md, tested byte-for-byte like the
-# jq gate: extract the printf that rewrites VERSION and run it on fixtures.
-bump=$(grep -o "printf .*> VERSION" SKILL.md | head -1)
+# The step-5 bump block published in SKILL.md, tested byte-for-byte: extract
+# it and run it in fixture repos, with st stubbed out.
+bump=$(sed -n '/^v="$(tr -d/,/^fi$/p' SKILL.md)
 if [ -z "$bump" ]; then
-  bad "could not extract version-bump line from SKILL.md"
+  bad "could not extract version-bump block from SKILL.md"
 else
-  ok "version-bump line extracted from SKILL.md"
-  bump_case() { # input expected
-    local d got; d=$(mktemp -d)
-    ( cd "$d" && v="$1" && eval "$bump" )
+  ok "version-bump block extracted from SKILL.md"
+  bump_case() { # tracked|untracked|absent input expected-VERSION expected-output label
+    local d got out commits
+    d=$(mktemp -d)
+    out=$(
+      cd "$d" || exit 1
+      git init -q
+      git config user.name test
+      git config user.email test@example.com
+      git config core.autocrlf false
+      git commit -q --allow-empty -m initial
+      if [ "$1" != absent ]; then printf '%s\n' "$2" > VERSION; fi
+      if [ "$1" = tracked ]; then git add VERSION && git commit -q -m version; fi
+      st() { :; }
+      eval "$bump" | grep '^bump skipped:'
+    )
     got=$(cat "$d/VERSION" 2>/dev/null)
+    commits=$(git -C "$d" log --oneline --grep '^chore: bump version' | wc -l | tr -d ' ')
     rm -rf "$d"
-    [ "$got" = "$2" ] && ok "bump $1 -> $2" || bad "bump $1 expected $2 got '$got'"
+    want_commits=1; [ -n "$4" ] && want_commits=0
+    if [ "$got" = "$3" ] && [ "$out" = "$4" ] && [ "$commits" = "$want_commits" ]; then
+      ok "bump: $5"
+    else
+      bad "bump: $5 (VERSION '$got', output '$out', bump commits $commits)"
+    fi
   }
-  bump_case 1.2.3 1.2.4
-  bump_case 0.9.9 0.9.10
+  bump_case tracked   1.2.3     1.2.4     ''                                    "tracked 1.2.3 -> 1.2.4, committed"
+  bump_case tracked   0.9.9     0.9.10    ''                                    "tracked 0.9.9 -> 0.9.10"
+  bump_case tracked   1.2.09    1.2.10    ''                                    "leading zero stays decimal"
+  bump_case untracked 1.2.3     1.2.3     'bump skipped: VERSION not tracked'   "untracked VERSION is not bumped"
+  bump_case untracked ''        ''        'bump skipped: VERSION not tracked'   "untracked empty VERSION (the SCP PR #4 stray)"
+  bump_case absent    ''        ''        'bump skipped: VERSION not tracked'   "no VERSION file"
+  bump_case tracked   ''        ''        "bump skipped: VERSION malformed: ''" "tracked empty VERSION"
+  bump_case tracked   3         3         "bump skipped: VERSION malformed: '3'" "dotless version"
+  bump_case tracked   1.2.3-rc1 1.2.3-rc1 "bump skipped: VERSION malformed: '1.2.3-rc1'" "suffixed version"
 fi
 
 exit $fail

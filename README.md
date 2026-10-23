@@ -58,7 +58,7 @@ cd ~/.claude/skills/zg-skills && git sparse-checkout set skills/stack-ship skill
 
 ```
 skills/
-  stack-ship/              SKILL.md, README.md, VERSION, CHANGELOG.md, tests/
+  stack-ship/              SKILL.md, README.md, VERSION, CHANGELOG.md, gate.jq, check-pipeline.sh, tests/
   z-adversarial-review/    SKILL.md, README.md, package.json (version), CHANGELOG.md, bin/, lib/, tests/, evals/, docs/
   zg-doc-integrity/        SKILL.md, README.md, package.json (version), CHANGELOG.md, bin/, lib/, tests/, evals/, docs/
   zg-verify-claims/        SKILL.md, README.md, VERSION, CHANGELOG.md, bin/, tests/

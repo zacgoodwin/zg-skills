@@ -46,53 +46,21 @@ roborev review --branch --wait
 
 Then the mechanical pass check — reviews stay "open" in the ledger until
 explicitly closed even when they PASS, so gate on failing verdicts, not on
-open count:
+open count. The filter ships as `gate.jq` next to this file (its header
+comment says what it rejects and why); run the file, never an inline copy,
+so no shell or hook between you and jq can rewrite it:
 
 ```bash
-# Fail-closed: exits non-zero on any F verdict among completed jobs, any
-# crashed (failed) review job, a non-array response, a null/empty response,
-# a branch with zero completed P verdicts, or a done-job verdict outside P/F
-# (schema drift must break the gate, not pass it). `null` (API error) and
-# `[]` (nothing to show evidence for) must NOT normalize into a vacuous
-# pass — the --branch review that just ran above always enqueues at least
-# one job for the branch's commits, so a real response has ≥1 done job by
-# the time we get here; anything else means the query itself is broken, not
-# that the branch is clean. A failed job means a commit went unreviewed —
-# re-run it (roborev review <sha>); roborev cannot close or cancel a failed
-# job, so it is superseded instead by a LATER (higher id) done review of the
-# same git_ref, or of EXACTLY the branch as it stands: GATE_RANGE, the
-# "<merge-base>..<HEAD>" git_ref roborev records for --branch, the one
-# range that covers every commit on the branch. Any other range (a --since
-# review, a --branch review of an older HEAD) supersedes nothing. A failed
-# job with no later done review still blocks, and so does a crashed --branch
-# review itself; a branch of all-crashed reviews must not submit as if it
-# were green. Supersession needs a numeric id and a string git_ref on BOTH
-# jobs (jq orders numbers above null and null == null), and a GATE_RANGE of
-# two hex SHAs: unset, empty, or malformed, range supersession is off.
-# Queued/running/canceled jobs carry verdict:null and are excluded —
-# preflight already drained the queue, and this very gate's --branch review
-# enqueues jobs the moment it runs. --branch pins the scope explicitly
-# rather than trusting the CLI's current-branch default. A trunk other than
-# origin's default (roborev's --base) never matches GATE_RANGE: fail-closed.
+# Fail-closed: any F verdict, crashed job with no later covering review,
+# schema drift, or a null/empty ledger exits non-zero. --branch pins the
+# scope explicitly rather than trusting the CLI's current-branch default. A
+# trunk other than origin's default (roborev's --base) never matches
+# GATE_RANGE: fail-closed.
+PACK=".claude/skills/stack-ship"; [ -d "$PACK" ] || PACK="$HOME/.claude/skills/stack-ship"
 trunk=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)
 range="$(git merge-base "${trunk:-origin/main}" HEAD)..$(git rev-parse HEAD)"
-roborev list --json --open --branch "$(git branch --show-current)" | GATE_RANGE="$range" jq -e '
-  type=="array"
-  and all(.[]; .status=="queued" or .status=="running" or .status=="done"
-               or .status=="failed" or .status=="canceled")
-  and all(.[] | select(.status=="done"); .verdict=="P" or .verdict=="F")
-  and all(.[] | select(.status!="done"); .verdict==null)
-  and ([.[] | select(.status=="done" and .verdict=="F")] | length == 0)
-  and ([.[] | select(.status=="done")] as $done
-       | [.[] | select(.status=="failed") | . as $f
-          | select([$done[] | select((.id|type)=="number" and ($f.id|type)=="number"
-                     and (.git_ref|type)=="string" and ($f.git_ref|type)=="string"
-                     and .id > $f.id
-                     and (.git_ref == $f.git_ref
-                          or ((env.GATE_RANGE // "" | test("^[0-9a-f]{7,64}\\.\\.[0-9a-f]{7,64}$"))
-                              and .git_ref == env.GATE_RANGE)))] | length == 0)]
-       | length == 0)
-  and ([.[] | select(.status=="done" and .verdict=="P")] | length >= 1)' >/dev/null
+roborev list --json --open --branch "$(git branch --show-current)" |
+  GATE_RANGE="$range" jq -e -f "$PACK/gate.jq" >/dev/null
 ```
 
 A failing review whose findings a later commit already addressed (confirmed
@@ -135,18 +103,26 @@ passed.
 Patch-bump the shipping repo's root `VERSION` after the adversarial verdict
 comes back mergeable, so the shipped diff carries its own version. With
 `--skip-adversarial`, bump right after submit. Skip the bump (and say why in
-the report) when the verdict is do-not-merge or when the repo has no root
-`VERSION` file.
+the report) when the verdict is do-not-merge. The block below skips it on its
+own, printing a `bump skipped:` line, when `VERSION` is missing, untracked
+(a stray file some tool left at the root is not this repo's version), or not
+a dotted version.
 
 ```bash
-# Bumps the last dot component (1.2.3 -> 1.2.4).
-# ponytail: dotless or suffixed versions (e.g. "3", "1.2.3-rc1") unsupported;
-# adopt a semver tool if a repo ever needs them.
-v="$(tr -d '[:space:]' < VERSION)"
-printf '%s\n' "${v%.*}.$(( ${v##*.} + 1 ))" > VERSION
-git add VERSION
-git commit -m "chore: bump version to $(cat VERSION)"
-st stack submit --squash --yes    # update the PR; no --ai, keep title/body
+# Bumps the last dot component (1.2.3 -> 1.2.4); 10# keeps "08" decimal.
+# ponytail: dotless or suffixed versions (e.g. "3", "1.2.3-rc1") are skipped,
+# not bumped; adopt a semver tool if a repo ever needs them.
+v="$(tr -d '[:space:]' 2>/dev/null < VERSION)"
+if ! git ls-files --error-unmatch VERSION >/dev/null 2>&1; then
+  echo "bump skipped: VERSION not tracked"
+elif ! printf '%s\n' "$v" | grep -Eqx '[0-9]+([.][0-9]+)+'; then
+  echo "bump skipped: VERSION malformed: '$v'"
+else
+  printf '%s\n' "${v%.*}.$((10#${v##*.} + 1))" > VERSION
+  git add VERSION
+  git commit -m "chore: bump version to $(cat VERSION)"
+  st stack submit --squash --yes    # update the PR; no --ai, keep title/body
+fi
 ```
 
 The bump commit re-triggers the roborev post-commit hook; its review lands
@@ -157,8 +133,9 @@ after this run ends — normal, the next run's preflight drains it.
 - PR URL and draft/published state.
 - Gate: passed first try, or refine iterations used.
 - Adversarial verdict, confidence, and skeptic quorum (received/of).
-- New version after the bump, or why it was skipped (no VERSION file, or
-  do-not-merge verdict).
+- New version after the bump, or why it was skipped: do-not-merge verdict,
+  or the step-5 `bump skipped:` line verbatim (VERSION not tracked, or the
+  malformed value).
 - Whether local branch SHAs were rewritten by the squash (note it so the
   next session knows the ledger reset).
 - Completion status: exactly one of DONE (all steps ran, gate green,
