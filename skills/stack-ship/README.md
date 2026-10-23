@@ -12,8 +12,8 @@ four-stage quality pipeline:
 3. **Adversarial review** — [z-adversarial-review](../z-adversarial-review)
    on the resulting PR with cross-provider skeptic seats (codex, agy, claude).
 4. **Version bump** — patch-bump the repo's root `VERSION` on the PR once the
-   verdict is mergeable. Skipped when the repo has no `VERSION` file or the
-   verdict is do-not-merge.
+   verdict is mergeable. Skipped when the repo has no tracked, dotted
+   `VERSION` file or the verdict is do-not-merge.
 
 Trigger in Claude Code: `/stack-ship`, "ship this branch". Flags: `--draft`,
 `--skip-adversarial`.
@@ -44,13 +44,16 @@ bash "$PACK/check-pipeline.sh"
 
 ## Files
 
-- `SKILL.md` — the skill itself; the jq gate the agent runs lives here.
+- `SKILL.md` — the skill itself.
+- `gate.jq` — the fail-closed gate filter step 2 runs with `jq -e -f`. A
+  file rather than an inline program, so no shell or hook between the agent
+  and jq can rewrite it.
 - `check-pipeline.sh` — deterministic wiring check (<2s, offline except the
-  local roborev daemon).
-- `tests/gate.sh` — package gate test. Extracts the jq gate and the
-  version-bump line from SKILL.md so the tested programs are exactly the
-  shipped ones, and asserts pass/fail fixtures (F verdicts, crashed jobs,
-  schema drift, null payloads, semver patch bumps).
+  local roborev daemon); includes a compile check of `gate.jq`.
+- `tests/gate.sh` — package gate test. Runs `gate.jq` against pass/fail
+  fixtures (F verdicts, crashed jobs, schema drift, null payloads), and
+  extracts the version-bump block from SKILL.md to run it in fixture repos
+  (patch bumps, untracked, empty, and malformed `VERSION` files).
 - `setup` — idempotent pack setup for bootstrap installers; just runs the
   gate test.
 - `VERSION` / `CHANGELOG.md` — this skill's own release version, independent

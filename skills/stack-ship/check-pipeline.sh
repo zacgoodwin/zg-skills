@@ -20,6 +20,13 @@ done
 gh extension list 2>/dev/null | grep -q gh-stack \
   && ok "gh-stack extension" || bad "gh-stack extension -> gh extension install github/gh-stack"
 
+# The step-2 gate runs this file; a missing or uncompilable one blocks every
+# ship. -n feeds null, which the gate rejects (exit 0 without -e); a compile
+# error exits 3.
+gate="$(dirname "$0")/gate.jq"
+[ -f "$gate" ] && jq -n -f "$gate" >/dev/null 2>&1 \
+  && ok "gate.jq compiles" || bad "gate.jq missing or does not compile -> reinstall stack-ship"
+
 # --git-path resolves through linked worktrees (.git is a file there) to the
 # shared hooks dir; a hardcoded .git/hooks breaks in every st worktree lane.
 hook="$(git rev-parse --git-path hooks)/post-commit"

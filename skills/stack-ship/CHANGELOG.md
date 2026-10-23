@@ -6,6 +6,24 @@ versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-10-22
+
+### Fixed
+
+- The step-2 gate failed to compile on Windows (`jq: error: Invalid escape
+  ... '"\.\."'`): something between the agent and jq, most likely a
+  command-rewriting hook, ate one level of backslash from the inline filter.
+  It failed closed, so every ship blocked. The filter now ships as
+  `gate.jq`, run with `jq -e -f`, and SKILL.md carries no inline jq program.
+  `check-pipeline.sh` checks the file exists and compiles.
+- The step-5 version bump ran on any root `VERSION`, including an empty,
+  untracked one a review seat left behind, and wrote `.1` into it, ready to
+  be committed into the shipped PR. The bump now runs only on a tracked
+  `VERSION` holding a dotted version; otherwise it prints `bump skipped:`
+  with the reason (not tracked, or the malformed value) and the report
+  repeats it. A zero-padded last component (`1.2.09`) bumps as decimal
+  instead of crashing bash's octal arithmetic.
+
 ## [1.0.3] - 2026-10-20
 
 ### Fixed
