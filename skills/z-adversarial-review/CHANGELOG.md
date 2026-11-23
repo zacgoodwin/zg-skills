@@ -6,6 +6,8 @@ versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-23
+
 ### Changed
 
 - The skill now acts on its findings instead of only reporting them. The

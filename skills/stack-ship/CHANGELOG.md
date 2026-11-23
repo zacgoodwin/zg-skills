@@ -6,6 +6,8 @@ versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-23
+
 ### Changed
 
 - A red gate no longer runs `roborev refine`, which fixed every finding.
