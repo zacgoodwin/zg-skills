@@ -54,7 +54,7 @@ export interface StageVerdict {
   attempt: number;
   result: string;
   // Present per stage; validated shallowly here, deterministically downstream:
-  //   reviewer { confidence, skepticVerdictPaths }  quorum counted off disk
+  //   reviewer { confidence, skepticVerdictPaths, findings }  quorum counted off disk
   //   skeptic  { lens, claimChecked }
   evidence?: Record<string, unknown>;
   notes?: string;
@@ -185,6 +185,66 @@ export function quorumFromDisk(
   return { received, of, unrefuted, invalid };
 }
 
+// -- reviewer findings, triaged by severity -------------------------------------
+
+// A REVIEW-FINDINGS verdict lists each finding in evidence.findings with one
+// of these severities. The session acting on the verdict FIXES only
+// "breaking" and "security" findings; every "minor" one becomes a ticket.
+// The split is read off this array in code, never off the notes prose.
+//   breaking  the diff does not work as specified: a criterion fails, the
+//             build/typecheck/tests break, a crash, data loss or corruption
+//   security  a serious, exploitable security flaw
+//   minor     everything else
+export const FINDING_SEVERITIES = ["breaking", "security", "minor"] as const;
+export type FindingSeverity = (typeof FINDING_SEVERITIES)[number];
+export const MUST_FIX_SEVERITIES: readonly FindingSeverity[] = ["breaking", "security"];
+
+export interface Finding {
+  severity: FindingSeverity;
+  where: string; // file:line
+  summary: string;
+}
+
+export type FindingsCheck = { ok: true; findings: Finding[] } | { ok: false; reason: string };
+
+// Same INVALID discipline as readVerdict: a malformed entry is never
+// reinterpreted. A REVIEW-FINDINGS verdict with no findings is invalid,
+// because without them there is nothing to triage and a must-fix finding
+// could hide in the prose.
+export function readFindings(result: string, evidence: Record<string, unknown> | undefined): FindingsCheck {
+  const raw = evidence?.findings;
+  if (raw === undefined || raw === null) {
+    return result === "REVIEW-FINDINGS"
+      ? { ok: false, reason: `REVIEW-FINDINGS verdict carries no evidence.findings to triage` }
+      : { ok: true, findings: [] };
+  }
+  if (!Array.isArray(raw)) return { ok: false, reason: `evidence.findings must be an array` };
+  if (result === "REVIEW-FINDINGS" && raw.length === 0) {
+    return { ok: false, reason: `REVIEW-FINDINGS verdict carries an empty evidence.findings` };
+  }
+  const findings: Finding[] = [];
+  for (const [i, f] of raw.entries()) {
+    const e = f as Partial<Finding> | null;
+    if (typeof e !== "object" || e === null || Array.isArray(e)) {
+      return { ok: false, reason: `evidence.findings[${i}] is not an object` };
+    }
+    if (!(FINDING_SEVERITIES as readonly unknown[]).includes(e.severity)) {
+      return { ok: false, reason: `evidence.findings[${i}].severity ${JSON.stringify(e.severity)} is not one of {${FINDING_SEVERITIES.join(", ")}}` };
+    }
+    for (const key of ["where", "summary"] as const) {
+      const val = e[key];
+      if (typeof val !== "string" || val.trim() === "") {
+        return { ok: false, reason: `evidence.findings[${i}].${key} must be a non-empty string` };
+      }
+      if (/^<[^>]*>$/.test(val.trim())) {
+        return { ok: false, reason: `evidence.findings[${i}].${key} still carries the contract's own placeholder` };
+      }
+    }
+    findings.push({ severity: e.severity as FindingSeverity, where: e.where as string, summary: e.summary as string });
+  }
+  return { ok: true, findings };
+}
+
 // -- prompt-side contract text -------------------------------------------------
 
 // The exit-contract block every prompt renders. Owned HERE so the writer
@@ -199,7 +259,7 @@ export function verdictInstructions(stage: VerdictStage, path: string, spawn: Ex
     .map((r) => `  "${r}"`)
     .join("\n");
   const evidenceHint = {
-    reviewer: `"evidence": { "confidence": <0-100>, "skepticVerdictPaths": [<the skeptic verdict paths you were given, ONLY those that exist>] },`,
+    reviewer: `"evidence": { "confidence": <0-100>, "skepticVerdictPaths": [<the skeptic verdict paths you were given, ONLY those that exist>], "findings": [<one { "severity": "${FINDING_SEVERITIES.join('" | "')}", "where": "file:line", "summary": "one line" } per finding; [] when there are none>] },`,
     skeptic: `"evidence": { "lens": "<your assigned lens>", "claimChecked": "<one line>" },`,
   }[stage];
   return `## Exit contract -- write ONE file, then end with one line (machine-read)

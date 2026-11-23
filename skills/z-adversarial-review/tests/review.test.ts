@@ -17,7 +17,7 @@ import {
 import { AGENT_MODELS, CLI_PROVIDERS, briefPath, cliCommand, writeSkepticPreference, type ProviderDeps } from "../lib/models.ts";
 import { REVIEWER_INPUT_KEYS } from "../lib/prompts.ts";
 import { isRunId } from "../lib/run-id.ts";
-import { VERDICT_SCHEMA_VERSION, quorumFromDisk, verdictPath } from "../lib/verdict.ts";
+import { VERDICT_SCHEMA_VERSION, quorumFromDisk, verdictPath, type Finding } from "../lib/verdict.ts";
 import { ZError } from "../lib/cli.ts";
 
 // -- fixture repo -------------------------------------------------------------
@@ -756,12 +756,48 @@ describe("collect", () => {
     writeVerdict(m.verdictPath, m, 121, "reviewer", "REVIEW-FINDINGS", {
       confidence: 80,
       skepticVerdictPaths: ["/tmp/invented.json"],
+      findings: [{ severity: "minor", where: "src/a.ts:3", summary: "unused import" }],
     });
     const r = collect(m.verdictPath, m.runRoot, m.runId, 121, m.adversarial);
     if (!r.ok) throw new Error(r.reason);
     expect(r.result).toBe("REVIEW-FINDINGS");
     expect(r.confidence).toBe(80);
     expect(r.quorum).toBeNull();
+    cleanup(repo, m.worktreePath);
+  });
+
+  test("findings are triaged in code: breaking + security are mustFix, the rest minor", () => {
+    const m = runPrepare(160, { headRefOid: smallHeadSha });
+    const findings: Finding[] = [
+      { severity: "breaking", where: "src/a.ts:10", summary: "criterion 2 fails on empty input" },
+      { severity: "security", where: "src/b.ts:4", summary: "token logged in plaintext" },
+      { severity: "minor", where: "src/c.ts:1", summary: "unused import" },
+      { severity: "minor", where: "src/c.ts:9", summary: "misleading name" },
+    ];
+    writeVerdict(m.verdictPath, m, 160, "reviewer", "REVIEW-FINDINGS", { confidence: 70, findings });
+    const r = collect(m.verdictPath, m.runRoot, m.runId, 160, m.adversarial);
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.findings).toEqual(findings);
+    expect(r.mustFix).toBe(2);
+    expect(r.minor).toBe(2);
+    cleanup(repo, m.worktreePath);
+  });
+
+  test("a REVIEW-FINDINGS verdict with no findings to triage is INVALID", () => {
+    const m = runPrepare(161, { headRefOid: smallHeadSha });
+    writeVerdict(m.verdictPath, m, 161, "reviewer", "REVIEW-FINDINGS", { confidence: 70 });
+    const r = collect(m.verdictPath, m.runRoot, m.runId, 161, m.adversarial);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("evidence.findings");
+    cleanup(repo, m.worktreePath);
+  });
+
+  test("an approval without findings collects with zero to fix or ticket", () => {
+    const m = runPrepare(162, { headRefOid: smallHeadSha });
+    writeVerdict(m.verdictPath, m, 162, "reviewer", "REVIEW-APPROVE", { confidence: 90 });
+    const r = collect(m.verdictPath, m.runRoot, m.runId, 162, m.adversarial);
+    if (!r.ok) throw new Error(r.reason);
+    expect(r).toMatchObject({ findings: [], mustFix: 0, minor: 0 });
     cleanup(repo, m.worktreePath);
   });
 

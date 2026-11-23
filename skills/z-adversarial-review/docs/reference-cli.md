@@ -171,6 +171,9 @@ those by hand.
 | `result` | One of `REVIEW-APPROVE`, `REVIEW-FINDINGS`, `NEEDS-HUMAN`, `BLOCKED`, `CONFUSED`. |
 | `notes` | The reviewer's human-facing line: findings list, question, or reason. `""` when absent. |
 | `confidence` | 0–100, or `null`. Single pass: the verdict's own `evidence.confidence`, `null` when absent or out of range. Adversarial with at least one valid skeptic verdict on disk: computed by `collect` as `round(unrefuted / received × 100)` for every result, which reproduces the reviewer's lookup table (3 UPHELD of 3 → 100, 2 → 67, 1 → 33, 0 → 0; short lineups have their own rows); the reviewer's own number is ignored. Adversarial with no skeptic verdicts: the reviewer's own number, capped at 99. |
+| `findings` | The verdict's `evidence.findings`, validated: each `{severity, where, summary}`, `severity` one of `breaking`, `security`, `minor`. `[]` when absent on any result but `REVIEW-FINDINGS`. |
+| `mustFix` | How many findings are `breaking` or `security`: the ones the skill fixes. |
+| `minor` | How many findings are `minor`: the ones the skill files as tickets instead of fixing. |
 | `quorum` | Counted off the three canonical `skeptic-<1,2,3>/verdict.json` files `prepare` itself laid out under `--run-root`; `null` when `--adversarial` is `false`. `received` = valid files found, `of` = 3, `unrefuted` = valid verdicts whose result is `UPHELD` and whose `notes` do not start `PROVISIONAL: `, `invalid` = one reason per unusable canonical path (e.g. missing, or non-string `notes`). |
 
 `collect` derives those three skeptic paths itself from `--run-root` and
@@ -290,7 +293,11 @@ Every stage (reviewer and each skeptic) reports by writing one
   "stage": "reviewer",
   "attempt": 1,
   "result": "REVIEW-FINDINGS",
-  "evidence": { "confidence": 67, "skepticVerdictPaths": ["…"] },
+  "evidence": {
+    "confidence": 67,
+    "skepticVerdictPaths": ["…"],
+    "findings": [{ "severity": "breaking", "where": "src/limiter.ts:41", "summary": "…" }]
+  },
   "notes": "1. src/limiter.ts:41 …"
 }
 ```
@@ -301,7 +308,10 @@ Result unions per stage (`STAGE_RESULTS`):
 - `skeptic`: `REFUTED`, `UPHELD`, `CONFUSED`
 
 Evidence shape per stage (validated shallowly, consumed deterministically):
-reviewer `{confidence, skepticVerdictPaths}`, skeptic `{lens, claimChecked}`.
+reviewer `{confidence, skepticVerdictPaths, findings}`, skeptic `{lens, claimChecked}`.
+`findings` severities: `breaking` (the diff does not work as specified: a
+failed criterion, a broken build, typecheck or test, a crash, data loss),
+`security` (a serious, exploitable security flaw), `minor` (everything else).
 `skepticVerdictPaths` is informational only — `collect` derives the quorum's
 file paths itself (see `collect` above) and never trusts this list.
 
@@ -310,6 +320,9 @@ is: unreadable, not valid JSON, not an object, the wrong `schema` version,
 mis-addressed (any of `runId`/`ticket`/`stage`/`attempt` not matching the
 spawn), outside its stage's result union, carrying the contract's own
 `<placeholder>` text in `notes`, or carrying a non-object `evidence`.
+`collect` also fails a reviewer verdict whose `evidence.findings` is
+malformed (not an array, an unknown severity, an empty or placeholder
+`where`/`summary`), and a `REVIEW-FINDINGS` verdict with no findings at all.
 
 ## Related
 

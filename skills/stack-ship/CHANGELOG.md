@@ -6,6 +6,19 @@ versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-23
+
+### Changed
+
+- A red gate no longer runs `roborev refine`, which fixed every finding.
+  The agent grades each finding `breaking`, `security` or `minor`, fixes
+  only the first two (one commit each), files one ticket per minor finding
+  in the tracker the user's setup names, and closes reviews whose findings
+  are all minor and ticketed. The gate then re-runs once, as before.
+- Step 4 follows z-adversarial-review's new fix-and-ticket step: after fix
+  commits, stack-ship resubmits and runs the review once more. A verdict
+  with only minor, ticketed findings is now mergeable and gets the bump.
+
 ## [1.0.4] - 2026-10-22
 
 ### Fixed

@@ -6,6 +6,22 @@ versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-23
+
+### Changed
+
+- The skill now acts on its findings instead of only reporting them. The
+  reviewer tags each finding in `evidence.findings` as `breaking`, `security`
+  or `minor`, and `collect` returns them with `mustFix` and `minor` counts.
+  A new Step 5 fixes only `breaking` and `security` findings (one commit each,
+  in the main checkout, and only when it sits clean on the PR's head commit)
+  and files one ticket per `minor` finding in the tracker the user's setup
+  names, asking when none is named. Minor findings no longer block a merge.
+  Pushing fixes stays opt-in. `collect` fails a `REVIEW-FINDINGS` verdict
+  with no `evidence.findings`, or with a malformed one. Step 1 also fetches
+  `headRefName` and `isCrossRepository` for the fix checks; neither reaches
+  the blinded input.
+
 ### Fixed
 
 - A review seat could write into the main checkout, undetected. On SCP PR #4
