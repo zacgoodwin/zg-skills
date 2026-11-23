@@ -61,7 +61,7 @@ else
 fi
 
 if [[ "${MOCK_CLAUDE_SILENT:-}" != "$MODE" ]]; then
-  printf '{"schema":1,"runId":"%s","ticket":%s,"stage":"reviewer","attempt":%s,"result":"REVIEW-FINDINGS","evidence":{"confidence":%s,"skepticVerdictPaths":[]},"notes":%s}' \
+  printf '{"schema":1,"runId":"%s","ticket":%s,"stage":"reviewer","attempt":%s,"result":"REVIEW-FINDINGS","evidence":{"confidence":%s,"skepticVerdictPaths":[],"findings":[{"severity":"breaking","where":"src/limiter.ts","summary":"mock-claude canned finding, structural check"}]},"notes":%s}' \
     "$RUN_ID" "$TICKET" "$ATTEMPT" "$CONF" "$(printf '%s' "$NOTES" | bun -e 'console.log(JSON.stringify(await new Response(Bun.stdin.stream()).text()))')" \
     > "$VPATH"
 fi

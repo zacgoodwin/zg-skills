@@ -15,7 +15,7 @@ const skill = readFileSync(join(REPO_ROOT, "SKILL.md"), "utf8");
 // (fenced blocks and inline backtick spans), whitespace-normalized.
 const GH_ALLOWLIST = [
   // Step 1 PR metadata fetch: read-only
-  `gh pr view $PR_ARG --json number,title,url,body,headRefOid,baseRefOid,baseRefName,labels,closingIssuesReferences > "$TMP/pr.json"`,
+  `gh pr view $PR_ARG --json number,title,url,body,headRefOid,headRefName,isCrossRepository,baseRefOid,baseRefName,labels,closingIssuesReferences > "$TMP/pr.json"`,
   // Step 1 linked-issue spec fetch: read-only
   `gh issue view "$SPEC_ISSUE" --json body,labels > "$TMP/issue.json"`,
   // Step 4 posting: the skill's ONE mutation, fenced behind an explicit user ask
@@ -81,6 +81,14 @@ describe("SKILL.md pins", () => {
 
   test("posting to the PR is explicitly opt-in", () => {
     expect(skill).toContain("only when the user explicitly asks");
+  });
+
+  test("only breaking and security findings are fixed; minor ones are ticketed", () => {
+    expect(skill).toContain("**Fix only `breaking` and `security` findings.**");
+    expect(skill).toContain("Never fix a `minor` one");
+    expect(skill).toContain("**Ticket every `minor` finding**");
+    expect(skill).toContain("Never guess, and never fall back");
+    expect(skill).toContain("Push the fix commits only when the\nuser asks");
   });
 });
 

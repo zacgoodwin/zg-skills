@@ -5,12 +5,15 @@ four-stage quality pipeline:
 
 1. **Gate** — `roborev review --branch --wait`, then a fail-closed jq check
    over the review ledger. Any failing verdict, crashed review job, or schema
-   drift blocks the submit. Red gate gets one bounded auto-fix pass
-   (`roborev refine --max-iterations 3`) and a single retry.
+   drift blocks the submit. A red gate gets one fix pass and a single retry:
+   only breaking and security findings are fixed, and each minor one is
+   filed as a ticket in the tracker your setup defines.
 2. **Submit** — `st stack submit --squash --ai --yes`: one clean squashed
    commit per branch, PR created/updated with AI title and body.
 3. **Adversarial review** — [z-adversarial-review](../z-adversarial-review)
    on the resulting PR with cross-provider skeptic seats (codex, agy, claude).
+   It fixes breaking and security findings and tickets minor ones; after
+   fixes, stack-ship resubmits and reviews once more.
 4. **Version bump** — patch-bump the repo's root `VERSION` on the PR once the
    verdict is mergeable. Skipped when the repo has no tracked, dotted
    `VERSION` file or the verdict is do-not-merge.

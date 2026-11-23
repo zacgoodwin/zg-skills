@@ -57,8 +57,11 @@ From a session inside a checkout of the repo whose PR you want reviewed:
 ```
 
 Ask for "single pass" or "with skeptics" to override the automatic fan-out
-decision. The review is read-only; posting the report as a PR comment happens
-only when you explicitly ask.
+decision. The reviewer tags every finding `breaking`, `security`, or `minor`.
+The skill fixes only `breaking` and `security` findings, on the PR's branch,
+and files one ticket per `minor` finding in the tracker your setup defines.
+Pushing the fixes and posting the report as a PR comment happen only when you
+explicitly ask.
 
 The first time you ever run this skill, it asks which outside CLIs (if any —
 Claude-only is an option) should staff the three skeptic seats, validates the

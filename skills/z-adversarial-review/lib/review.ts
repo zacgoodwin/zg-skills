@@ -53,10 +53,13 @@ import {
 } from "./prompts.ts";
 import { mintRunId, stageDest } from "./run-id.ts";
 import {
+  MUST_FIX_SEVERITIES,
   quorumFromDisk,
+  readFindings,
   readVerdict,
   verdictPath,
   type ExpectedSpawn,
+  type Finding,
   type QuorumFromDisk,
 } from "./verdict.ts";
 
@@ -619,6 +622,11 @@ export type CollectResult =
       notes: string;
       confidence: number | null;
       quorum: QuorumFromDisk | null; // null on a single pass (no skeptics listed)
+      // Triage, read off evidence.findings: the session fixes `mustFix`
+      // (breaking + security) and files a ticket per `minor` finding.
+      findings: Finding[];
+      mustFix: number;
+      minor: number;
     }
   | { ok: false; reason: string };
 
@@ -642,6 +650,9 @@ export function collect(
   const check = readVerdict(verdictFile, expect);
   if (!check.ok) return { ok: false, reason: check.reason };
   const v = check.verdict;
+  const triage = readFindings(v.result, v.evidence);
+  if (!triage.ok) return { ok: false, reason: triage.reason };
+  const mustFix = triage.findings.filter((f) => MUST_FIX_SEVERITIES.includes(f.severity)).length;
   const conf = (v.evidence as { confidence?: unknown } | undefined)?.confidence;
   // Skeptic paths are DERIVED from the layout prepare() itself created (the
   // same stageDest/skeptic-<k> shape prepare wrote to disk), never taken from
@@ -668,6 +679,9 @@ export function collect(
     notes: v.notes ?? "",
     confidence,
     quorum,
+    findings: triage.findings,
+    mustFix,
+    minor: triage.findings.length - mustFix,
   };
 }
 
@@ -718,7 +732,11 @@ const USAGE = `review <command> [args]
       is true -- count the skeptic quorum off the canonical skeptic-<1,2,3>
       verdict files prepare itself laid out under --run-root (never off the
       reviewer's self-reported evidence.skepticVerdictPaths). Prints JSON:
-      {ok, result, notes, confidence, quorum} or {ok:false, reason}. Exit 0
+      {ok, result, notes, confidence, quorum, findings, mustFix, minor} or
+      {ok:false, reason}. findings come from the verdict's evidence.findings
+      (severity breaking|security|minor); mustFix counts breaking + security,
+      minor the rest. A REVIEW-FINDINGS verdict without findings is
+      {ok:false}. Exit 0
       both ways -- INVALID is an answer. --adversarial is the manifest's own
       "adversarial" field, passed verbatim.
 

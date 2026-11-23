@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   quorumFromDisk,
+  readFindings,
   readVerdict,
   VERDICT_SCHEMA_VERSION,
   verdictInstructions,
@@ -164,5 +165,38 @@ describe("verdictInstructions", () => {
     expect(t).toContain('"REFUTED"');
     expect(t).toContain('"UPHELD"');
     expect(t).toContain("verdict written");
+  });
+});
+
+describe("readFindings", () => {
+  const ok = { severity: "breaking", where: "a.ts:1", summary: "crashes on null" } as const;
+
+  test("valid findings pass through in order", () => {
+    const r = readFindings("REVIEW-FINDINGS", { findings: [ok, { ...ok, severity: "minor" }] });
+    expect(r).toEqual({ ok: true, findings: [ok, { ...ok, severity: "minor" as const }] });
+  });
+
+  test("absent findings are fine on any result but REVIEW-FINDINGS", () => {
+    expect(readFindings("REVIEW-APPROVE", undefined)).toEqual({ ok: true, findings: [] });
+    expect(readFindings("NEEDS-HUMAN", {})).toEqual({ ok: true, findings: [] });
+    expect(readFindings("REVIEW-FINDINGS", {}).ok).toBe(false);
+    expect(readFindings("REVIEW-FINDINGS", { findings: [] }).ok).toBe(false);
+  });
+
+  test("every malformed entry is INVALID, named, never reinterpreted", () => {
+    for (const bad of [
+      "not-an-array",
+      [null],
+      [[ok]],
+      [{ ...ok, severity: "critical" }],
+      [{ ...ok, severity: undefined }],
+      [{ ...ok, where: "" }],
+      [{ ...ok, summary: 7 }],
+      [{ ...ok, summary: "<one line>" }],
+      [{ ...ok, where: "<file:line>" }],
+    ]) {
+      const r = readFindings("REVIEW-FINDINGS", { findings: bad });
+      expect(r.ok).toBe(false);
+    }
   });
 });

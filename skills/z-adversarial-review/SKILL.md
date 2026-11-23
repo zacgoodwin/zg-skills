@@ -9,8 +9,11 @@ description: |
   vendors' CLIs (codex, agy) for cross-provider blind spots. On the first
   ever run it asks which of those CLIs (if any) should staff the seats,
   validates the choice, and saves it so later runs never ask again; the
-  setup verb re-validates that fleet on demand. Read-only by default;
-  posting the review to the PR is an explicit opt-in.
+  setup verb re-validates that fleet on demand. Every finding is tagged
+  breaking, security, or minor: the skill fixes only breaking findings and
+  serious security flaws, and files each minor finding as a ticket in the
+  tracker the user's setup defines. Pushing fixes and posting the review to
+  the PR are explicit opt-ins.
   Use when asked to "z-adversarial-review", "adversarially review this PR",
   "review PR <N> with skeptics", or for a blinded second opinion on any pull
   request.
@@ -29,9 +32,11 @@ anyone's prose.
 
 Everything decidable is decided in code (`lib/review.ts`): spec selection,
 acceptance-criteria extraction, diff generation, worktree lifecycle, fan-out
-activation, skeptic briefs, verdict validation, quorum counting. Your latent
-work is exactly three things: spawn the reviewer, relay the collected verdict
-as a report, and exercise judgment on anything the verdict asks a human to
+activation, skeptic briefs, verdict validation, quorum counting, and the
+severity split between findings to fix and findings to ticket. Your latent
+work is exactly four things: spawn the reviewer, relay the collected verdict
+as a report, fix the breaking and security findings and ticket the minor ones
+(Step 5), and exercise judgment on anything the verdict asks a human to
 settle.
 
 **Prerequisites:** run from inside a git checkout of the repo under review;
@@ -114,7 +119,7 @@ PACK=".claude/skills/z-adversarial-review"
 TMP=$(mktemp -d)
 
 # PR metadata (read-only)
-gh pr view $PR_ARG --json number,title,url,body,headRefOid,baseRefOid,baseRefName,labels,closingIssuesReferences > "$TMP/pr.json"
+gh pr view $PR_ARG --json number,title,url,body,headRefOid,headRefName,isCrossRepository,baseRefOid,baseRefName,labels,closingIssuesReferences > "$TMP/pr.json"
 
 # Linked closing issue (read-only, optional): the preferred spec source,
 # because it is independent of the diff author's own narrative
@@ -191,7 +196,11 @@ bun "$PACK/lib/review.ts" collect --verdict "$VERDICT_PATH" \
   --adversarial "$ADVERSARIAL"
 ```
 
-Prints `{ok, result, notes, confidence, quorum}`. `result` is one of
+Prints `{ok, result, notes, confidence, quorum, findings, mustFix, minor}`.
+`findings` is the reviewer's list, each `{severity, where, summary}` with
+`severity` one of `breaking`, `security`, `minor`; `mustFix` counts the
+breaking and security ones, `minor` the rest. The split is read off the
+verdict file in code: never re-grade a severity yourself. `result` is one of
 `REVIEW-APPROVE`, `REVIEW-FINDINGS`, `NEEDS-HUMAN`, `BLOCKED`, `CONFUSED`.
 `quorum` is `{received, of, unrefuted, invalid}` counted off the canonical
 skeptic verdict files `prepare` itself laid out on disk (`null` when
@@ -202,7 +211,7 @@ during the review (each path named; revert them by hand, `cleanup` does not)
 the reason, clean up, and offer to re-run; never reconstruct a verdict from
 the transcript.
 
-## Step 4 — Report, then clean up
+## Step 4 — Report
 
 Render the report to the user (and to `"$TMP/report.md"` if it may be posted):
 
@@ -215,11 +224,19 @@ Render the report to the user (and to `"$TMP/report.md"` if it may be posted):
 **Spec:** <specSource — with the caveat, verbatim, when it is not a linked issue:
 "criteria came from the diff author's own description; treat the approval floor accordingly">
 
-<the findings / evidence from `notes`, numbered, each with file:line>
+**Must fix:** <mustFix> (breaking/security) · **Ticketed:** <minor> (minor)
+
+<the findings from `findings`, numbered, each as `[severity] where: summary`,
+must-fix first; then any evidence from `notes` the list does not carry>
 ```
 
-- `REVIEW-FINDINGS` → list every finding; recommend the PR not merge until
-  each is addressed or explicitly waived by a human.
+- `REVIEW-FINDINGS` with `mustFix` > 0 → the PR must not merge until every
+  breaking and security finding is fixed (Step 5) or explicitly waived by a
+  human.
+- `REVIEW-FINDINGS` with `mustFix` 0 → mergeable once each minor finding is
+  ticketed (Step 5). Minor findings never block the merge.
+- `mustFix` > 0 blocks the merge whatever `result` says, `REVIEW-APPROVE`
+  included.
 - `NEEDS-HUMAN` / `BLOCKED` / `CONFUSED` → relay `notes` verbatim; that is a
   real outcome for the human, not a failure to hide.
 - A `REVIEW-APPROVE` with `confidence` below 70, with `quorum.received` short
@@ -233,6 +250,59 @@ once posted):
 ```bash
 gh pr comment "$PR_NUM" --body-file "$TMP/report.md"
 ```
+
+## Step 5 — Fix what breaks, ticket the rest
+
+Runs only on an `{ok: true}` collect with at least one finding. A
+`NEEDS-HUMAN`, `BLOCKED` or `CONFUSED` result skips this step.
+
+**Fix only `breaking` and `security` findings.** Never fix a `minor` one,
+even when the edit is one line: it goes to a ticket. Fix in the main
+checkout, and only when all of these hold (from `pr.json`):
+
+- `isCrossRepository` is `false` (a fork's branch can't be pushed from here),
+- the current branch is `headRefName`,
+- `git rev-parse HEAD` equals `headRefOid` (the review covered this commit),
+- `git status --porcelain --untracked-files=no` prints nothing.
+
+If any fails, fix nothing: report each must-fix finding as a merge blocker
+and name the check that failed. Otherwise, for each must-fix finding:
+
+1. Make the smallest edit that resolves it. No refactors, no cleanups, no
+   minor findings riding along.
+2. Add or tighten a test that fails without the fix, when the finding can be
+   tested.
+3. Run the typecheck and the tests the fix touches. Red = revert that fix,
+   report the finding as unfixed, move on.
+4. Commit it alone: `fix: <summary> (z-adversarial-review <runId>, finding <n>)`.
+
+A finding you can't fix with confidence stays unfixed and is reported as a
+merge blocker. One pass only; never loop. Push the fix commits only when the
+user asks, or when a calling skill (stack-ship) owns the submit. The fixes
+are unreviewed: recommend one re-run of this review on the new head before
+merge, and never start it on your own.
+
+**Ticket every `minor` finding** in the tracker the user's setup defines:
+
+1. Find the tracker. Use the one named in the repo's or the user's
+   CLAUDE.md / AGENTS.md. If none is named, use the issue-tracker connector
+   or MCP server this session has (Linear, Jira, GitHub Issues, and so on)
+   when exactly one is connected. Zero or several, and nothing names one:
+   ask the user once with AskUserQuestion. Never guess, and never fall back
+   to a tracker nobody named.
+2. Before filing, search that tracker for an open ticket on the same
+   `where` and summary (an earlier run may have filed it). Found = link it,
+   don't duplicate.
+3. One ticket per finding. Title: `[review] <summary> (<where>)`. Body: the
+   finding's `where` and `summary`, the PR URL, and
+   `Found by z-adversarial-review run <runId>; minor, not fixed in the PR.`
+4. A tracker you can't reach, or a filing that errors: list those findings
+   in the report as **not ticketed**, with the error. Never drop one.
+
+Add to the report: each fix commit (sha and finding number), each finding
+left unfixed and why, and each ticket's URL or id.
+
+## Step 6 — Clean up
 
 **Always clean up**, whatever the verdict — including after a failed spawn
 (`worktreePath` from the manifest):

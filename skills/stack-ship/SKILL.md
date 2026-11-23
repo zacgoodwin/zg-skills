@@ -2,7 +2,8 @@
 name: stack-ship
 description: >-
   Ship the current stax branch through the quality pipeline: gate on roborev
-  per-commit reviews (bounded auto-fix loop on failure), squash-submit one
+  per-commit reviews (fixes only breaking and security findings, tickets the
+  minor ones), squash-submit one
   clean commit upstream as a PR via stax, run blinded cross-provider
   adversarial review on that PR, then patch-bump VERSION on the shipped PR.
   Use when asked to "stack-ship", "ship this branch", or to present a stacked
@@ -68,15 +69,34 @@ by the branch-level re-review passing) is stale: close it with
 `roborev close <id>` — the CLI has no comment flag, so name the fixing
 commit in the ship report instead.
 
-**Red gate → bounded auto-fix, single retry:**
+**Red gate → triage, one fix pass, single retry.** Do not run
+`roborev refine`: it fixes every finding, minor ones included. Read each
+failing review from `roborev list --json --open` and grade every finding in
+it with z-adversarial-review's severities, judged by what the finding says,
+not by roborev's own label:
 
-```bash
-roborev refine --max-iterations 3
-```
+- `breaking`: the branch does not work as intended (a broken build,
+  typecheck or test, a crash, data loss or corruption).
+- `security`: a serious, exploitable security flaw.
+- `minor`: everything else.
 
-then re-run the gate exactly once. Still red = stop: list each open finding
-(job id, severity, one-line summary) from `roborev list --json --open`, end
-with BLOCKED. The refine loop is the only retry; never loop the gate itself.
+Then:
+
+1. Fix each `breaking` and `security` finding by the rules in
+   z-adversarial-review's Step 5: the smallest edit, a test that fails
+   without it where one can be written, typecheck and touched tests green,
+   one commit per finding. Never fix a `minor` one.
+2. File one ticket per `minor` finding, in the tracker and with the
+   dedupe and no-guessing rules of z-adversarial-review's Step 5.
+3. A failing review whose findings are all `minor` and all ticketed:
+   `roborev close <id>`, and name the ticket ids in the ship report.
+
+Re-run the gate exactly once: the `--branch` review, then the jq check. The
+re-review can flag a minor finding ticketed in step 2 again; close that
+review too (link the existing ticket, file nothing new) and re-run only the
+jq check. Anything else still red = stop: list each open finding (job id,
+severity, one-line summary) from `roborev list --json --open`, end with
+BLOCKED. One fix pass is the only retry; never loop the gate itself.
 
 ## 3. Submit — one clean commit upstream
 
@@ -98,10 +118,18 @@ codex, agy, claude — i.e. `--skeptic-models '["codex","agy","inherit"]'`
 (`inherit` = the Claude seat). Skipped only when `--skip-adversarial` was
 passed.
 
+Its Step 5 fixes the `breaking` and `security` findings and tickets the
+`minor` ones. stack-ship owns the submit, so when it made fix commits:
+`st stack submit --squash --yes` (no `--ai`, keep title/body), then run the
+adversarial review once more on the new head. That second run still fixes
+nothing on its own: `mustFix` > 0 there = stop with BLOCKED and list each
+one. Never run a third.
+
 ## 5. Version bump — only on a shippable verdict
 
 Patch-bump the shipping repo's root `VERSION` after the adversarial verdict
-comes back mergeable, so the shipped diff carries its own version. With
+comes back mergeable (`REVIEW-APPROVE`, or `REVIEW-FINDINGS` with `mustFix`
+0 and every minor finding ticketed), so the shipped diff carries its own version. With
 `--skip-adversarial`, bump right after submit. Skip the bump (and say why in
 the report) when the verdict is do-not-merge. The block below skips it on its
 own, printing a `bump skipped:` line, when `VERSION` is missing, untracked
@@ -131,8 +159,12 @@ after this run ends — normal, the next run's preflight drains it.
 ## 6. Report
 
 - PR URL and draft/published state.
-- Gate: passed first try, or refine iterations used.
-- Adversarial verdict, confidence, and skeptic quorum (received/of).
+- Gate: passed first try, or the fix commits made and the reviews closed as
+  all-minor.
+- Adversarial verdict, confidence, skeptic quorum (received/of), and
+  `mustFix` / `minor` counts; whether a second review ran after fixes.
+- Every ticket filed (gate and review), by URL or id, and any minor finding
+  left not ticketed with the error.
 - New version after the bump, or why it was skipped: do-not-merge verdict,
   or the step-5 `bump skipped:` line verbatim (VERSION not tracked, or the
   malformed value).
